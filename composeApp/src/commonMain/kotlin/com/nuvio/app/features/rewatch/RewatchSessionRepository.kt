@@ -1,6 +1,8 @@
 package com.nuvio.app.features.rewatch
 
 import com.nuvio.app.features.profiles.ProfileRepository
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -9,6 +11,13 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 private const val REWATCH_STORAGE_SCHEMA_VERSION = 1
+
+/** Tagged identity prevents old-profile replay data from reaching new Home. */
+internal data class ProfileRewatchSnapshot(
+    val profileId: Int,
+    val sessions: List<RewatchSession>
+)
+
 
 @Serializable
 internal data class RewatchSessionsEnvelope(
@@ -37,10 +46,17 @@ internal interface RewatchSessionAccess {
 
 internal object RewatchSessionRepository : RewatchSessionAccess {
     private val mutex = Mutex()
+    private val _snapshot = MutableStateFlow<ProfileRewatchSnapshot?>(null)
+    val snapshot: StateFlow<ProfileRewatchSnapshot?> = _snapshot
 
     override suspend fun load(profileId: Int): List<RewatchSession> = mutex.withLock {
         require(profileId > 0)
-        decodeRewatchSessionPayload(RewatchSessionStorage.loadPayload(profileId))
+        val loaded = decodeRewatchSessionPayload(
+            RewatchSessionStorage.loadPayload(profileId)
+        )
+        // Read failure must never erase the previously saved payload.
+        _snapshot.value = ProfileRewatchSnapshot(profileId, loaded)
+        loaded
     }
 
     /**
@@ -72,8 +88,45 @@ internal object RewatchSessionRepository : RewatchSessionAccess {
                 RewatchSessionsEnvelope(sessions = updated)
             )
         )
+        _snapshot.value = ProfileRewatchSnapshot(profileId, updated)
         true
     }
+    /**
+     * Dismiss only the independent replay, retaining a FINISHED tombstone so
+     * the old provider Next Up cannot reappear after Home recomputes.
+     */
+    suspend fun dismiss(profileId: Int, ownerKey: String, contentId: String): Boolean =
+        mutex.withLock {
+            if (profileId <= 0 || ProfileRepository.activeProfileId != profileId) {
+                return@withLock false
+            }
+            val stored = decodeRewatchSessionPayload(
+                RewatchSessionStorage.loadPayload(profileId)
+            )
+            val index = stored.indexOfFirst {
+                it.ownerKey == ownerKey &&
+                    it.canonicalSeriesId.trim().equals(contentId.trim(), ignoreCase = true)
+            }
+            if (index < 0) return@withLock false
+            val original = stored[index]
+            if (original.phase == RewatchPhase.FINISHED) return@withLock true
+            val next = stored.toMutableList()
+            next[index] = original.copy(
+                phase = RewatchPhase.FINISHED,
+                updatedAtEpochMs = maxOf(
+                    com.nuvio.app.features.watchprogress.WatchProgressClock.nowEpochMs(),
+                    original.updatedAtEpochMs + 1L
+                )
+            )
+            if (ProfileRepository.activeProfileId != profileId) return@withLock false
+            RewatchSessionStorage.savePayload(
+                profileId,
+                rewatchJson.encodeToString(RewatchSessionsEnvelope(sessions = next))
+            )
+            _snapshot.value = ProfileRewatchSnapshot(profileId, next)
+            true
+        }
+
 }
 
 internal fun decodeRewatchSessionPayload(raw: String?): List<RewatchSession> {

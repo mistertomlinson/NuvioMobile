@@ -1,5 +1,6 @@
 package com.nuvio.app.features.rewatch
 
+import com.nuvio.app.features.profiles.ProfileRepository
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -53,6 +54,10 @@ internal object RewatchSessionRepository : RewatchSessionAccess {
         replaceSession: Boolean = false
     ): Boolean = mutex.withLock {
         require(profileId > 0)
+        // Serialize writes and verify the original profile while the lock is
+        // held. Otherwise a profile switch could commit an outgoing replay
+        // into the wrong currently displayed profile.
+        if (ProfileRepository.activeProfileId != profileId) return@withLock false
         val original = decodeRewatchSessionPayload(
             RewatchSessionStorage.loadPayload(profileId)
         )
@@ -60,6 +65,7 @@ internal object RewatchSessionRepository : RewatchSessionAccess {
             original, session, replaceSession
         ) ?: return@withLock false
 
+        if (ProfileRepository.activeProfileId != profileId) return@withLock false
         RewatchSessionStorage.savePayload(
             profileId,
             rewatchJson.encodeToString(

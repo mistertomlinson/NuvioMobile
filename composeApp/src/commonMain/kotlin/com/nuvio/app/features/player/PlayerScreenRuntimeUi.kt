@@ -200,7 +200,12 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi(
         }
         val resolvedAutoEngine = resolvedAutoEngineState.value
 
-        if (playerSurfaceSourceUrl != null) {
+        // Surface initialization receives initialPositionMs directly. Do
+        // not construct a player with an old Simkl resume position until the
+        // isolated replay cursor has been classified for this exact episode.
+        if (playerSurfaceSourceUrl != null &&
+            rewatchWriteMode != PlayerRewatchWriteMode.PENDING
+        ) {
             key(playbackKey) {
                 val active = remember { mutableStateOf(true) }
                 DisposableEffect(Unit) {

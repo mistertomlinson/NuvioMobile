@@ -97,6 +97,13 @@ import com.nuvio.app.features.watching.domain.isReleasedBy
 import com.nuvio.app.features.collection.CollectionRepository
 import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.home.components.HomeCollectionRowSection
+import com.nuvio.app.features.rewatch.RewatchPhase
+import com.nuvio.app.features.rewatch.RewatchSessionRepository
+import com.nuvio.app.features.rewatch.resolvePendingRewatchSuccessor
+import com.nuvio.app.features.player.verifiedPlayerRewatchCompletionCatalog
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -318,6 +325,94 @@ fun HomeScreen(
     }
     val profileState by ProfileRepository.state.collectAsStateWithLifecycle()
     val activeProfileId = profileState.activeProfile?.profileIndex ?: 1
+    val replaySnapshot by RewatchSessionRepository.snapshot.collectAsStateWithLifecycle()
+    var verifiedReplayCards by remember(activeProfileId) {
+        mutableStateOf<List<ContinueWatchingItem>>(emptyList())
+    }
+
+    // Rehydrate profile-isolated replay state whenever Home becomes active.
+    // No writes are made to normal Simkl progress or watched history.
+    ScreenActivityEffect(activeProfileId) { active ->
+        if (!active) return@ScreenActivityEffect
+        try {
+            RewatchSessionRepository.load(activeProfileId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            println("Home rewatch: unable to read isolated profile state: ${error.message}")
+        }
+    }
+
+    // Resolve only exact episode identities. Never substitute the provider's
+    // outdated Next Up when rewatch metadata is missing.
+    ScreenActivityEffect(
+        activeProfileId,
+        replaySnapshot,
+        addonsUiState.addons,
+        networkStatusUiState.condition,
+    ) { active ->
+        if (!active) return@ScreenActivityEffect
+        val captured = replaySnapshot
+        if (captured?.profileId != activeProfileId) {
+            verifiedReplayCards = emptyList()
+            return@ScreenActivityEffect
+        }
+        val candidates = captured.sessions
+            .filter { it.ownerKey == "local-profile:$activeProfileId" }
+            .filter { it.phase != RewatchPhase.FINISHED }
+
+        val projected = coroutineScope {
+            val limiter = Semaphore(2)
+            candidates.map { original ->
+                async(Dispatchers.Default) {
+                    limiter.withPermit {
+                        val meta = try {
+                            MetaDetailsRepository.fetch(
+                                type = "series",
+                                id = original.canonicalSeriesId,
+                            )
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
+                            println("Home rewatch: metadata unavailable: ${error.message}")
+                            null
+                        } ?: return@withPermit null
+
+                        val resolved = if (
+                            original.phase == RewatchPhase.AWAITING_METADATA &&
+                            original.lastCompletedEpisode != null
+                        ) {
+                            val catalog = verifiedPlayerRewatchCompletionCatalog(
+                                meta, original.lastCompletedEpisode
+                            )
+                            if (catalog.metadataComplete) {
+                                val updated = resolvePendingRewatchSuccessor(
+                                    session = original,
+                                    orderedPlayableEpisodes = catalog.orderedEpisodes,
+                                    metadataComplete = true
+                                )
+                                if (updated != original &&
+                                    ProfileRepository.activeProfileId == activeProfileId &&
+                                    RewatchSessionRepository.upsert(
+                                        profileId = activeProfileId,
+                                        session = updated
+                                    )
+                                ) updated else original
+                            } else original
+                        } else original
+
+                        projectHomeRewatchCard(resolved, meta)
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
+        if (ProfileRepository.activeProfileId == activeProfileId &&
+            RewatchSessionRepository.snapshot.value == captured
+        ) {
+            verifiedReplayCards = projected
+        }
+    }
+
     val cwCacheGeneration by ContinueWatchingEnrichmentCache.generation.collectAsStateWithLifecycle()
     var hasUserScrolledContinueWatching by remember(activeProfileId) { mutableStateOf(false) }
     var hasUserScrolledUpcoming by remember(activeProfileId) { mutableStateOf(false) }
@@ -537,12 +632,35 @@ fun HomeScreen(
     val shuffledContinueWatchingItems = remember(rawShuffledContinueWatchingItems, cwPosterPattern) {
         rawShuffledContinueWatchingItems.withCustomPosterUrls(cwPosterPattern)
     }
-    val (continueWatchingItems, upcomingItems) = remember(
+    // Merge AFTER the normal shuffle/cached resolver has finished. Otherwise
+    // a later provider injection could overwrite the authoritative replay.
+    val replayAwareContinueWatchingItems = remember(
         shuffledContinueWatchingItems,
+        replaySnapshot,
+        verifiedReplayCards,
+        activeProfileId,
+    ) {
+        val current = replaySnapshot
+        if (current?.profileId != activeProfileId) {
+            // Do not briefly display a previous profile's stale provider CW
+            // while the new profile's isolated replay state is still loading.
+            emptyList()
+        } else {
+            mergeHomeRewatchCards(
+                providerItems = shuffledContinueWatchingItems,
+                profileReplaySessions = current.sessions.filter {
+                    it.ownerKey == "local-profile:$activeProfileId"
+                },
+                verifiedReplayCards = verifiedReplayCards,
+            )
+        }
+    }
+    val (continueWatchingItems, upcomingItems) = remember(
+        replayAwareContinueWatchingItems,
         continueWatchingPreferences.sortMode,
     ) {
         splitUpcomingItems(
-            items = shuffledContinueWatchingItems,
+            items = replayAwareContinueWatchingItems,
             mode = continueWatchingPreferences.sortMode,
         )
     }

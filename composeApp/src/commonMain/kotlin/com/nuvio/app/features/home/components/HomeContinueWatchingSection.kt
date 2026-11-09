@@ -762,6 +762,11 @@ private fun ContinueWatchingCard(
             )
         }
         if (item.shufflePlayback) ShuffleBadge(Modifier.align(Alignment.TopStart).padding(8.dp))
+        if (item.isRewatch) {
+            Box(Modifier.align(Alignment.TopStart).padding(cardMetrics.badgeInset)) {
+                UpNextBadge(item, stringResource(Res.string.cw_rewatch), true, cardMetrics.badgeTextSize)
+            }
+        }
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
@@ -954,6 +959,9 @@ private fun ContinueWatchingWideCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     if (item.shufflePlayback) ShuffleBadge()
+                    if (item.isRewatch) {
+                        UpNextBadge(item, stringResource(Res.string.cw_rewatch), true, layout.wideBadgeTextSize)
+                    }
                     if (item.progressFraction <= 0f && item.seasonNumber != null && item.episodeNumber != null) {
                         val todayIsoDate = CurrentDateProvider.todayIsoDate()
                         val badgeText = when {
@@ -1072,6 +1080,11 @@ private fun ContinueWatchingPosterCard(
                 )
             }
             if (item.shufflePlayback) ShuffleBadge(Modifier.align(Alignment.TopStart).padding(8.dp))
+            if (item.isRewatch) {
+                Box(Modifier.align(Alignment.TopStart).padding(8.dp)) {
+                    UpNextBadge(item, stringResource(Res.string.cw_rewatch), true, layout.posterBadgeTextSize)
+                }
+            }
             if (item.progressFraction <= 0f && item.seasonNumber != null && item.episodeNumber != null) {
                 Box(
                     modifier = Modifier

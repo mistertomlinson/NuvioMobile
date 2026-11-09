@@ -50,7 +50,9 @@ internal suspend fun PlayerScreenRuntime.classifyRewatchBeforeTracking() {
     ) return
 
     val resolved: RewatchSession? = if (
-        !isSeries || series.isEmpty() || selectedEpisode == null
+        parentMetaType.trim().lowercase() !in
+            setOf("series", "tv", "show", "tvshow") ||
+            series.isEmpty() || selectedEpisode == null
     ) null else {
         WatchedRepository.ensureLoaded()
         WatchProgressRepository.ensureLoaded()
@@ -96,6 +98,22 @@ internal suspend fun PlayerScreenRuntime.classifyRewatchBeforeTracking() {
         selectedProfile != profileId ||
         selectedProfile != ProfileRepository.activeProfileId
     ) return
+
+    val handoff = pendingRewatchAutoplayHandoff
+    if (handoff != null) {
+        if (handoff.expectedEpisode == selectedEpisode) {
+            check(playerRewatchAutoplayHandoffReady(
+                handoff = handoff,
+                resolved = resolved,
+                requested = selectedEpisode
+            )) {
+                "Autoplay replay cursor did not advance to the expected next episode"
+            }
+        }
+        // Different manual episode selections must not inherit the automatic
+        // successor requirement of the previous episode.
+        pendingRewatchAutoplayHandoff = null
+    }
 
     if (resolved != null && selectedEpisode != null) {
         val ownPosition = resolveRewatchResumePosition(

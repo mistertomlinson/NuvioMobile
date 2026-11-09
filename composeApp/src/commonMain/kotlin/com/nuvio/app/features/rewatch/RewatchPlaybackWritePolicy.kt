@@ -36,3 +36,28 @@ fun resolveRewatchPlaybackWriteRoute(
     // Metadata loss cannot downgrade an active replay to a provider write.
     return RewatchPlaybackWriteRoute.REWATCH_SESSION_ONLY
 }
+
+
+/**
+ * null keeps the normal provider resume path; zero ignores older provider
+ * playback and starts the replay's queued episode from the beginning.
+ * Positive positions are taken solely from the independent replay cursor.
+ */
+fun resolveRewatchResumePosition(
+    session: RewatchSession?,
+    ownerKey: String,
+    canonicalSeriesId: String,
+    episode: RewatchEpisode
+): Long? {
+    if (resolveRewatchPlaybackWriteRoute(
+            session = session,
+            ownerKey = ownerKey,
+            canonicalSeriesId = canonicalSeriesId,
+            episode = episode
+        ) != RewatchPlaybackWriteRoute.REWATCH_SESSION_ONLY
+    ) return null
+
+    return if (session?.phase == RewatchPhase.PLAYING) {
+        session.positionMs.coerceAtLeast(0L)
+    } else 0L
+}

@@ -28,7 +28,7 @@ private val rewatchJson = Json {
 /** Local-only session storage boundary, injectable in replay activation tests. */
 internal interface RewatchSessionAccess {
     suspend fun load(profileId: Int): List<RewatchSession>
-    override suspend fun upsert(
+    suspend fun upsert(
         profileId: Int,
         session: RewatchSession,
         replaceSession: Boolean = false
@@ -48,10 +48,10 @@ internal object RewatchSessionRepository : RewatchSessionAccess {
      * from being accidentally stored under whichever profile later becomes
      * active. A different session requires an intentional restart.
      */
-    suspend fun upsert(
+    override suspend fun upsert(
         profileId: Int,
         session: RewatchSession,
-        replaceSession: Boolean = false
+        replaceSession: Boolean
     ): Boolean = mutex.withLock {
         require(profileId > 0)
         // Serialize writes and verify the original profile while the lock is

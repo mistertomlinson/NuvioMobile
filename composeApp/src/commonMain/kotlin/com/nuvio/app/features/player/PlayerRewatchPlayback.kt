@@ -7,6 +7,7 @@ import com.nuvio.app.features.rewatch.RewatchSession
 import com.nuvio.app.features.rewatch.RewatchSessionRepository
 import com.nuvio.app.features.rewatch.RewatchPhase
 import com.nuvio.app.features.rewatch.completeRewatchEpisode
+import com.nuvio.app.features.rewatch.resolvePendingRewatchSuccessor
 import com.nuvio.app.features.rewatch.recordRewatchProgress
 import com.nuvio.app.features.rewatch.resolveOrStartRewatchForPlayback
 import com.nuvio.app.features.rewatch.resolveRewatchResumePosition
@@ -14,7 +15,6 @@ import com.nuvio.app.features.watched.WatchedRepository
 import com.nuvio.app.features.watchprogress.WatchProgressClock
 import com.nuvio.app.features.watchprogress.WatchProgressRepository
 import com.nuvio.app.features.watchprogress.isWatchProgressComplete
-import com.nuvio.app.features.watching.application.WatchingState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -226,4 +226,43 @@ internal fun PlayerScreenRuntime.persistIsolatedRewatchSnapshot(
         }
     }
     pendingRewatchSaveJob = saving
+}
+
+
+/**
+ * Resolves AWAITING_METADATA after the details catalog becomes available,
+ * including when a delayed metadata request completes after playback EOF.
+ * No provider watched-history endpoint is contacted.
+ */
+internal suspend fun PlayerScreenRuntime.resolvePendingRewatchMetadata() {
+    if (!isIos || rewatchWriteMode != PlayerRewatchWriteMode.REPLAY) return
+    val profile = profileId
+    val key = activePlaybackKey
+    pendingRewatchSaveJob?.join()
+    if (ProfileRepository.activeProfileId != profile || key != activePlaybackKey) return
+
+    val session = activeRewatchSession?.takeIf {
+        it.phase == RewatchPhase.AWAITING_METADATA &&
+            it.lastCompletedEpisode != null
+    } ?: return
+    val meta = (metaUiState.meta ?: playerMeta)?.takeIf {
+        it.id.trim().equals(session.canonicalSeriesId.trim(), ignoreCase = true)
+    } ?: return
+    val completedEpisode = session.lastCompletedEpisode ?: return
+    val catalog = verifiedPlayerRewatchCompletionCatalog(meta, completedEpisode)
+    if (!catalog.metadataComplete) return
+
+    val updated = resolvePendingRewatchSuccessor(
+        session = session,
+        orderedPlayableEpisodes = catalog.orderedEpisodes,
+        metadataComplete = true
+    )
+    if (updated == session || key != activePlaybackKey) return
+    if (RewatchSessionRepository.upsert(profile, updated) &&
+        ProfileRepository.activeProfileId == profile &&
+        key == activePlaybackKey &&
+        activeRewatchSession?.sessionId == updated.sessionId
+    ) {
+        activeRewatchSession = updated
+    }
 }

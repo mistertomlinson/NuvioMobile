@@ -1,6 +1,13 @@
 name: Build Test IPA
 
 on:
+  push:
+    branches:
+      - feature/persistent-simkl-rewatch-0.6.7
+    paths:
+      - 'composeApp/src/**'
+      - 'composeApp/build.gradle.kts'
+      - '.github/workflows/ios-test-build.yml'
   workflow_dispatch:
     inputs:
       configuration:
@@ -23,7 +30,7 @@ jobs:
   build:
     name: Build unsigned full ${{ inputs.configuration }} IPA
     runs-on: xcode-27
-    timeout-minutes: ${{ inputs.configuration == 'Release' && 75 || 30 }}
+    timeout-minutes: ${{ github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && 75 || (inputs.configuration == 'Release' && 75 || 30) }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
       GRADLE_OPTS: -Dfile.encoding=UTF-8
@@ -64,6 +71,18 @@ jobs:
         run: |
           printf '%s' "${RELEASE_PROPERTIES_BASE64}" | base64 --decode > local.properties
           sed -i '' -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
+
+      - name: Ensure optional local.properties input exists for simulator validation
+        if: github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
+        shell: bash
+        run: |
+          # GenerateRuntimeConfigsTask marks this as an optional @InputFile,
+          # but Gradle 9.4.1 validates the configured file path if absent.
+          # Simulator-only compile tests need no production API credentials.
+          if [[ ! -f local.properties ]]; then
+            : > local.properties
+          fi
+          test -f local.properties
 
       - name: Prepare iOS dependencies
         run: ./scripts/prepare-ios-dependencies.sh

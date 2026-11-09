@@ -488,6 +488,25 @@ internal fun PlayerScreenRuntime.playNextEpisode(automatic: Boolean = false) {
     if (!isCurrentRequest()) return
     nextEpisodeAutoPlayAutomatic = automatic
 
+    // Automatic advance of a replay means the outgoing episode is finished,
+    // even when the configured credit threshold occurs before natural EOF.
+    // The new player will await this write and check the expected successor.
+    if (automatic && rewatchWriteMode == PlayerRewatchWriteMode.REPLAY) {
+        val current = activeRewatchSession
+        val next = nextEpisodeInfo?.let {
+            playerRewatchEpisode(it.season, it.episode)
+        }
+        if (current != null && next != null) {
+            pendingRewatchAutoplayHandoff = PlayerRewatchAutoplayHandoff(
+                sessionId = current.sessionId,
+                expectedEpisode = next
+            )
+            persistIsolatedRewatchSnapshot(
+                playbackSnapshot.copy(isEnded = true)
+            )
+        }
+    }
+
     scope.launchPlayerNextEpisodeAutoPlay(
         previousJob = nextEpisodeAutoPlayJob,
         nextEpisodeInfo = nextEpisodeInfo,

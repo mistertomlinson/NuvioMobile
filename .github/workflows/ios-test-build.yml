@@ -65,7 +65,26 @@ jobs:
           printf '%s' "${RELEASE_PROPERTIES_BASE64}" | base64 --decode > local.properties
           sed -i '' -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
 
+      - name: Prepare iOS dependencies
+        run: ./scripts/prepare-ios-dependencies.sh
+
+      - name: Validate iPad replay changes with iOS simulator tests
+        if: github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
+        run: |
+          ./gradlew :composeApp:iosSimulatorArm64Test \
+            -Pnuvio.ios.distribution=full \
+            -Dorg.gradle.jvmargs="-Xmx4608M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=768M" \
+            -Pkotlin.native.jvmArgs="-Xmx4608M" \
+            --console=plain
+
+      - name: Summarize rewatch validation
+        if: github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
+        run: |
+          echo "Full-distribution iOS simulator tests passed." >> "$GITHUB_STEP_SUMMARY"
+          echo "HEAD=$(git rev-parse --short HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Refuse incomplete full-release runtime configuration
+        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
         shell: bash
         run: |
           python3 - <<'PY'
@@ -101,10 +120,8 @@ jobs:
           print("Required Nuvio, TMDB, and Simkl build keys are present (values hidden).")
           PY
 
-      - name: Prepare iOS dependencies
-        run: ./scripts/prepare-ios-dependencies.sh
-
       - name: Build unsigned full ${{ inputs.configuration }} IPA
+        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
         run: |
           (
             while sleep 60; do
@@ -120,6 +137,7 @@ jobs:
           ./scripts/build-ios-ipa.sh
 
       - name: Summarize IPA
+        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
         run: |
           configuration_slug="$(printf '%s' "${IOS_CONFIGURATION}" | tr '[:upper:]' '[:lower:]')"
           ipa_path="$(find build/ios-ipa -maxdepth 1 -type f -name "*-full-${configuration_slug}.ipa" -print -quit)"
@@ -140,6 +158,7 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload test IPA
+        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
         uses: actions/upload-artifact@v7
         with:
           name: nuvio-test-${{ inputs.configuration }}-ipa-${{ github.sha }}

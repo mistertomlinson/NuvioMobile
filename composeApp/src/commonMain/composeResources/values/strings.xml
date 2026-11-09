@@ -614,6 +614,7 @@
     <string name="action_support_nuvio">Support Nuvio</string>
     <string name="cw_action_go_to_details">Go to details</string>
     <string name="cw_action_remove">Remove</string>
+    <string name="cw_rewatch">Rewatch</string>
     <string name="cw_action_start_from_beginning">Start from beginning</string>
     <string name="detail_btn_play">Play</string>
     <string name="detail_comments_badge_rating">%1$d/10</string>

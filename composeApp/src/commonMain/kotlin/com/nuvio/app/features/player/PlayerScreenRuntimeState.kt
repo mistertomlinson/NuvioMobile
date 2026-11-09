@@ -18,6 +18,7 @@ import com.nuvio.app.features.player.skip.NextEpisodeInfo
 import com.nuvio.app.features.player.skip.SkipInterval
 import com.nuvio.app.features.streams.StreamsUiState
 import com.nuvio.app.features.tracking.TrackingMediaReference
+import com.nuvio.app.features.rewatch.RewatchSession
 import com.nuvio.app.features.watched.WatchedUiState
 import com.nuvio.app.features.watchprogress.WatchProgressUiState
 import kotlinx.coroutines.CoroutineScope
@@ -180,6 +181,13 @@ internal class PlayerScreenRuntime(
     var pendingSeekScrobbleRestart by mutableStateOf(false)
     var hasSentCompletionScrobbleForCurrentItem by mutableStateOf(false)
     var currentTrackingMedia by mutableStateOf<TrackingMediaReference?>(null)
+    /** No tracking/progress write is allowed until this exact episode is classified. */
+    var rewatchClassifiedKey by mutableStateOf<PlaybackKey?>(null)
+    var rewatchClassifiedProfileId by mutableStateOf<Int?>(null)
+    var activeRewatchSession by mutableStateOf<RewatchSession?>(null)
+    /** Serializes replay writes across seeks, EOF and episode switches. */
+    var pendingRewatchSaveJob: Job? = null
+
 
     var showSourcesPanel by mutableStateOf(false)
     var showEpisodesPanel by mutableStateOf(false)

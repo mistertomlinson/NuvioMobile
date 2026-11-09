@@ -1,9 +1,12 @@
 package com.nuvio.app.features.rewatch
 
+import kotlinx.serialization.Serializable
+
 /**
  * Independent replay cursor. This model never reads or writes tracking-provider
  * watched history. The caller owns persistence, identity resolution and sync.
  */
+@Serializable
 data class RewatchEpisode(val season: Int, val episode: Int) {
     init {
         require(season > 0) { "Specials are not implicitly part of a series replay" }
@@ -11,6 +14,7 @@ data class RewatchEpisode(val season: Int, val episode: Int) {
     }
 }
 
+@Serializable
 enum class RewatchPhase {
     PLAYING,
     NEXT_UP,
@@ -18,6 +22,7 @@ enum class RewatchPhase {
     FINISHED
 }
 
+@Serializable
 data class RewatchSession(
     val ownerKey: String,
     val canonicalSeriesId: String,

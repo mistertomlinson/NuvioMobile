@@ -1,5 +1,6 @@
 package com.nuvio.app.features.player
 
+import com.nuvio.app.isIos
 import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.rewatch.RewatchEpisode
 import com.nuvio.app.features.rewatch.RewatchSession
@@ -40,6 +41,17 @@ internal suspend fun PlayerScreenRuntime.classifyRewatchBeforeTracking() {
     val selectedProfile = profileId
     val series = parentMetaId.trim()
     val selectedEpisode = playerRewatchEpisode(activeSeasonNumber, activeEpisodeNumber)
+
+    // This 0.6.7 development branch is for the iPad IPA. Its separate KMP
+    // Android flavor has no initialized replay storage; keep Android's
+    // existing tracking behavior intact until that flavor is deliberately
+    // integrated and tested.
+    if (!isIos) {
+        activeRewatchSession = null
+        rewatchClassifiedProfileId = selectedProfile
+        rewatchClassifiedKey = key
+        return
+    }
 
     // Earlier replay writes, including an EOF flush before autoplay, must
     // commit before the next episode tries to read its durable cursor.

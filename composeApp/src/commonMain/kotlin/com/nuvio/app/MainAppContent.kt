@@ -109,6 +109,7 @@ import com.nuvio.app.features.downloads.DownloadsRepository
 import com.nuvio.app.features.home.HomeCatalogSection
 import com.nuvio.app.features.home.HomeCatalogSettingsRepository
 import com.nuvio.app.features.home.HomeRepository
+import com.nuvio.app.features.rewatch.RewatchSessionRepository
 import com.nuvio.app.features.home.buildAddonCatalogRefreshSignature
 import com.nuvio.app.features.home.components.shouldBlurContinueWatchingArtwork
 import com.nuvio.app.features.library.LibraryItem
@@ -1258,23 +1259,41 @@ internal fun MainAppContent(
         }
 
         val onContinueWatchingRemove: (ContinueWatchingItem) -> Unit = { item ->
-            continueWatchingDisintegrationRequests.arm(continueWatchingItemKey(item))
-            if (item.isNextUp) {
-                ContinueWatchingPreferencesRepository.addDismissedNextUpKey(
-                    nextUpDismissKey(
-                        item.parentMetaId,
-                        item.nextUpSeedSeasonNumber,
-                        item.nextUpSeedEpisodeNumber,
-                    ),
-                )
+            if (item.isRewatch) {
+                val selectedProfile = ProfileRepository.activeProfileId
+                coroutineScope.launch {
+                    val removed = runCatching {
+                        RewatchSessionRepository.dismiss(
+                            profileId = selectedProfile,
+                            ownerKey = "local-profile:$selectedProfile",
+                            contentId = item.parentMetaId,
+                        )
+                    }.getOrDefault(false)
+                    if (removed && ProfileRepository.activeProfileId == selectedProfile) {
+                        continueWatchingDisintegrationRequests.arm(continueWatchingItemKey(item))
+                    }
+                }
             } else {
-                WatchProgressRepository.removeProgress(contentId = item.parentMetaId)
+                continueWatchingDisintegrationRequests.arm(continueWatchingItemKey(item))
+                if (item.isNextUp) {
+                    ContinueWatchingPreferencesRepository.addDismissedNextUpKey(
+                        nextUpDismissKey(
+                            item.parentMetaId,
+                            item.nextUpSeedSeasonNumber,
+                            item.nextUpSeedEpisodeNumber,
+                        ),
+                    )
+                } else {
+                    WatchProgressRepository.removeProgress(contentId = item.parentMetaId)
+                }
             }
         }
 
         val onContinueWatchingMarkWatched: (ContinueWatchingItem) -> Unit = { item ->
-            continueWatchingDisintegrationRequests.arm(continueWatchingItemKey(item))
-            WatchingActions.markContinueWatchingWatched(item)
+            if (!item.isRewatch) {
+                continueWatchingDisintegrationRequests.arm(continueWatchingItemKey(item))
+                WatchingActions.markContinueWatchingWatched(item)
+            }
         }
 
         val onContinueWatchingLongPress: (ContinueWatchingItem) -> Unit = { item ->
@@ -1922,7 +1941,7 @@ internal fun MainAppContent(
                                         ),
                                     )
                                 }
-                                if (!item.isNextUp && canPlayContinueWatching(item)) {
+                                if (!item.isNextUp && !item.isRewatch && canPlayContinueWatching(item)) {
                                     add(
                                         PosterZoomOverlayAction(
                                             icon = Icons.Default.Replay,
@@ -1931,7 +1950,7 @@ internal fun MainAppContent(
                                         ),
                                     )
                                 }
-                                if (item.canMarkWatched()) {
+                                if (!item.isRewatch && item.canMarkWatched()) {
                                     add(
                                         PosterZoomOverlayAction(
                                             icon = Icons.Default.CheckCircle,
@@ -1977,12 +1996,12 @@ internal fun MainAppContent(
                     }
                 },
                 onStartFromBeginning = selectedContinueWatchingForActions
-                    ?.takeIf { !it.isNextUp && canPlayContinueWatching(it) }
+                    ?.takeIf { !it.isNextUp && !it.isRewatch && canPlayContinueWatching(it) }
                     ?.let { item -> { onContinueWatchingStartFromBeginning(item) } },
                 onPlayManually = selectedContinueWatchingForActions
                     ?.let { item -> { onContinueWatchingPlayManually(item) } },
                 onMarkWatched = selectedContinueWatchingForActions
-                    ?.takeIf { it.canMarkWatched() }
+                    ?.takeIf { !it.isRewatch && it.canMarkWatched() }
                     ?.let { item -> { onContinueWatchingMarkWatched(item) } },
                 onRemove = {
                     selectedContinueWatchingForActions?.let(onContinueWatchingRemove)

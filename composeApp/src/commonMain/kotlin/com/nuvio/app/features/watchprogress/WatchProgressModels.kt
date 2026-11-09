@@ -226,6 +226,8 @@ data class ContinueWatchingItem(
     val rawBackgroundUrl: String? = null,
     val shufflePlayback: Boolean = false,
     val isWatched: Boolean = false,
+    /** Independent replay cursor: never dismiss provider history for this card. */
+    val isRewatch: Boolean = false,
 )
 
 internal fun continueWatchingItemKey(item: ContinueWatchingItem): String {

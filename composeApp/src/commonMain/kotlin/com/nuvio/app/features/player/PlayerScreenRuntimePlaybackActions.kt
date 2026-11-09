@@ -211,6 +211,7 @@ internal fun PlayerScreenRuntime.currentTrackingMedia(): TrackingMediaReference 
     snapshotTrackingScrobbleItemInputs().buildMedia()
 
 internal fun PlayerScreenRuntime.emitTrackingScrobbleStart() {
+    if (rewatchWriteMode != PlayerRewatchWriteMode.NORMAL) return
     if (isShortPlaceholderDuration(playbackSnapshot.durationMs)) return
     if (hasRequestedScrobbleStartForCurrentItem) return
     hasRequestedScrobbleStartForCurrentItem = true
@@ -218,6 +219,7 @@ internal fun PlayerScreenRuntime.emitTrackingScrobbleStart() {
     scrobbleStartRequestGeneration = requestGeneration
 
     scope.launch {
+        if (rewatchWriteMode != PlayerRewatchWriteMode.NORMAL) return@launch
         if (isShortPlaceholderDuration(playbackSnapshot.durationMs)) return@launch
         val media = currentTrackingMedia()
         if (!media.hasResolvableIdentity) {
@@ -257,6 +259,7 @@ private fun PlayerScreenRuntime.emitTrackingScrobbleTerminal(
     action: TrackingScrobbleAction,
     progressPercent: Float?,
 ) {
+    if (rewatchWriteMode != PlayerRewatchWriteMode.NORMAL) return
     if (isShortPlaceholderDuration(playbackSnapshot.durationMs)) return
     val provided = progressPercent
     if (!hasRequestedScrobbleStartForCurrentItem && (provided ?: 0f) < 80f) return
@@ -265,6 +268,7 @@ private fun PlayerScreenRuntime.emitTrackingScrobbleTerminal(
     val mediaSnapshot = currentTrackingMedia
     val inputsSnapshot = snapshotTrackingScrobbleItemInputs()
     scope.launch(NonCancellable) {
+        if (rewatchWriteMode != PlayerRewatchWriteMode.NORMAL) return@launch
         val media = mediaSnapshot ?: inputsSnapshot.buildMedia()
         if (!media.hasResolvableIdentity) return@launch
         TrackingScrobbleCoordinator.scrobble(
@@ -280,6 +284,7 @@ private fun PlayerScreenRuntime.emitTrackingScrobbleTerminal(
 }
 
 internal fun PlayerScreenRuntime.emitStopScrobbleForCurrentProgress() {
+    if (rewatchWriteMode != PlayerRewatchWriteMode.NORMAL) return
     if (isShortPlaceholderDuration(playbackSnapshot.durationMs)) return
     val progressPercent = currentPlaybackProgressPercent()
     if (!shouldSendStopScrobble(hasRequestedScrobbleStartForCurrentItem, progressPercent)) {
@@ -307,10 +312,12 @@ internal fun shouldUpdateTrackingScrobbleAfterSeek(
 ): Boolean = hasActiveScrobble && progressPercent >= 1f && progressPercent < 80f
 
 internal fun PlayerScreenRuntime.emitTrackingSeekScrobbleStart() {
+    if (rewatchWriteMode != PlayerRewatchWriteMode.NORMAL) return
     if (isShortPlaceholderDuration(playbackSnapshot.durationMs)) return
     val mediaSnapshot = currentTrackingMedia
     val inputsSnapshot = snapshotTrackingScrobbleItemInputs()
     scope.launch {
+        if (rewatchWriteMode != PlayerRewatchWriteMode.NORMAL) return@launch
         if (isShortPlaceholderDuration(playbackSnapshot.durationMs)) return@launch
         val media = mediaSnapshot ?: inputsSnapshot.buildMedia()
         if (!media.hasResolvableIdentity) return@launch
@@ -353,6 +360,14 @@ internal suspend fun PlayerScreenRuntime.resolveParentalGuideImdbId(): String? {
 internal fun PlayerScreenRuntime.flushWatchProgress(
     scrobbleAction: TrackingScrobbleAction = TrackingScrobbleAction.STOP,
 ) {
+    when (rewatchWriteMode) {
+        PlayerRewatchWriteMode.PENDING -> return
+        PlayerRewatchWriteMode.REPLAY -> {
+            persistIsolatedRewatchSnapshot()
+            return
+        }
+        PlayerRewatchWriteMode.NORMAL -> Unit
+    }
     when (scrobbleAction) {
         TrackingScrobbleAction.PAUSE -> emitTrackingScrobblePause()
         TrackingScrobbleAction.STOP -> emitStopScrobbleForCurrentProgress()
@@ -370,6 +385,14 @@ internal fun PlayerScreenRuntime.scheduleProgressSyncAfterSeek() {
     seekProgressSyncJob = scope.launch {
         delay(PlayerSeekProgressSyncDebounceMs)
         if (isShortPlaceholderDuration(playbackSnapshot.durationMs)) return@launch
+        when (rewatchWriteMode) {
+            PlayerRewatchWriteMode.PENDING -> return@launch
+            PlayerRewatchWriteMode.REPLAY -> {
+                persistIsolatedRewatchSnapshot()
+                return@launch
+            }
+            PlayerRewatchWriteMode.NORMAL -> Unit
+        }
         WatchProgressRepository.upsertPlaybackProgress(
             session = playbackSession,
             snapshot = playbackSnapshot,
@@ -392,6 +415,7 @@ internal fun PlayerScreenRuntime.scheduleProgressSyncAfterSeek() {
             progressPercent = progressPercent.toDouble(),
         )
         scope.launch {
+            if (rewatchWriteMode != PlayerRewatchWriteMode.NORMAL) return@launch
             if (isShortPlaceholderDuration(playbackSnapshot.durationMs)) return@launch
             TrackingScrobbleCoordinator.scrobbleSeek(
                 profileId = profileId,
@@ -420,7 +444,12 @@ internal fun PlayerScreenRuntime.scheduleProgressSyncAfterSeek() {
 internal fun PlayerScreenRuntime.persistPlaybackProgressTick() {
     val now = WatchProgressClock.nowEpochMs()
     if (now - lastProgressPersistEpochMs < PlaybackProgressPersistIntervalMs) return
+    if (rewatchWriteMode == PlayerRewatchWriteMode.PENDING) return
     lastProgressPersistEpochMs = now
+    if (rewatchWriteMode == PlayerRewatchWriteMode.REPLAY) {
+        persistIsolatedRewatchSnapshot()
+        return
+    }
     WatchProgressRepository.upsertPlaybackProgress(
         session = playbackSession,
         snapshot = playbackSnapshot,

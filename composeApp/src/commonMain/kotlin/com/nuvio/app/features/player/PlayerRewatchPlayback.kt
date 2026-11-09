@@ -12,6 +12,7 @@ import com.nuvio.app.features.rewatch.resolveRewatchResumePosition
 import com.nuvio.app.features.watched.WatchedRepository
 import com.nuvio.app.features.watchprogress.WatchProgressClock
 import com.nuvio.app.features.watchprogress.WatchProgressRepository
+import com.nuvio.app.features.watchprogress.isEffectivelyCompleted
 import com.nuvio.app.features.watchprogress.isWatchProgressComplete
 import com.nuvio.app.features.watching.application.WatchingState
 import kotlinx.coroutines.CancellationException

@@ -81,9 +81,33 @@ internal fun mergeHomeRewatchCards(
     val masked = profileReplaySessions.mapTo(mutableSetOf()) {
         key(it.canonicalSeriesId)
     }
+    val byId = profileReplaySessions.associateBy {
+        key(it.canonicalSeriesId)
+    }
     val verifiedById = verifiedReplayCards
-        .filter { it.isRewatch && key(it.parentMetaId) in masked }
-        .associateBy { key(it.parentMetaId) }
+        .mapNotNull { item ->
+            if (!item.isRewatch) return@mapNotNull null
+            val identity = key(item.parentMetaId)
+            val current = byId[identity] ?: return@mapNotNull null
+            if (current.phase !in setOf(RewatchPhase.PLAYING, RewatchPhase.NEXT_UP) ||
+                item.seasonNumber != current.episode.season ||
+                item.episodeNumber != current.episode.episode ||
+                item.isNextUp != (current.phase == RewatchPhase.NEXT_UP)
+            ) return@mapNotNull null
+
+            // Reuse verified artwork/episode metadata, but never reuse the
+            // previous replay's position after a late async save.
+            val position = if (item.isNextUp) 0L else current.positionMs.coerceAtLeast(0L)
+            val duration = if (item.isNextUp) 0L else current.durationMs.coerceAtLeast(0L)
+            val fraction = if (duration > 0L) {
+                (position.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+            } else 0f
+            identity to item.copy(
+                resumePositionMs = position,
+                durationMs = duration,
+                progressFraction = fraction
+            )
+        }.toMap()
     val inserted = mutableSetOf<String>()
     val merged = mutableListOf<ContinueWatchingItem>()
 

@@ -24,10 +24,20 @@ private val rewatchJson = Json {
  * This is deliberately distinct from Simkl history, watched flags and the
  * existing Nuvio watch-progress payload. Nothing calls it from playback yet.
  */
-internal object RewatchSessionRepository {
+/** Local-only session storage boundary, injectable in replay activation tests. */
+internal interface RewatchSessionAccess {
+    suspend fun load(profileId: Int): List<RewatchSession>
+    override suspend fun upsert(
+        profileId: Int,
+        session: RewatchSession,
+        replaceSession: Boolean = false
+    ): Boolean
+}
+
+internal object RewatchSessionRepository : RewatchSessionAccess {
     private val mutex = Mutex()
 
-    suspend fun load(profileId: Int): List<RewatchSession> = mutex.withLock {
+    override suspend fun load(profileId: Int): List<RewatchSession> = mutex.withLock {
         require(profileId > 0)
         decodeRewatchSessionPayload(RewatchSessionStorage.loadPayload(profileId))
     }

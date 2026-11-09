@@ -4,6 +4,7 @@ import com.nuvio.app.isIos
 import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.rewatch.RewatchEpisode
 import com.nuvio.app.features.rewatch.RewatchSession
+import com.nuvio.app.features.rewatch.RewatchSaveCoordinator
 import com.nuvio.app.features.rewatch.RewatchSessionRepository
 import com.nuvio.app.features.rewatch.RewatchPhase
 import com.nuvio.app.features.rewatch.completeRewatchEpisode
@@ -17,9 +18,7 @@ import com.nuvio.app.features.watchprogress.WatchProgressRepository
 import com.nuvio.app.features.watchprogress.isWatchProgressComplete
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.random.Random
 
@@ -55,7 +54,7 @@ internal suspend fun PlayerScreenRuntime.classifyRewatchBeforeTracking() {
 
     // Earlier replay writes, including an EOF flush before autoplay, must
     // commit before the next episode tries to read its durable cursor.
-    pendingRewatchSaveJob?.join()
+    RewatchSaveCoordinator.awaitPending()
     if (key != activePlaybackKey ||
         selectedProfile != profileId ||
         selectedProfile != ProfileRepository.activeProfileId
@@ -165,7 +164,6 @@ internal fun PlayerScreenRuntime.persistIsolatedRewatchSnapshot(
     val metadata = (metaUiState.meta ?: playerMeta)?.takeIf {
         it.id.trim().equals(parentMetaId.trim(), ignoreCase = true)
     }
-    val previous = pendingRewatchSaveJob
     val capturedAt = WatchProgressClock.nowEpochMs()
     val completed = snapshot.durationMs > 0L && isWatchProgressComplete(
         positionMs = snapshot.positionMs,
@@ -175,21 +173,20 @@ internal fun PlayerScreenRuntime.persistIsolatedRewatchSnapshot(
     val position = snapshot.positionMs.coerceAtLeast(0L)
     val duration = snapshot.durationMs.coerceAtLeast(0L)
 
-    val saving: Job = scope.launch(NonCancellable) {
+    val saving: Job = RewatchSaveCoordinator.enqueue {
         try {
-            previous?.join()
-            if (ProfileRepository.activeProfileId != profile) return@launch
+            if (ProfileRepository.activeProfileId != profile) return@enqueue
             val current = RewatchSessionRepository.load(profile).firstOrNull {
                 it.sessionId == initial.sessionId &&
                     it.ownerKey == initial.ownerKey &&
                     it.canonicalSeriesId.trim().equals(
                         initial.canonicalSeriesId.trim(), ignoreCase = true
                     )
-            } ?: return@launch
+            } ?: return@enqueue
             if (current.episode != episode ||
                 current.phase == RewatchPhase.FINISHED ||
                 current.phase == RewatchPhase.AWAITING_METADATA
-            ) return@launch
+            ) return@enqueue
 
             val updated = if (completed) {
                 val catalog = verifiedPlayerRewatchCompletionCatalog(metadata, episode)
@@ -209,7 +206,7 @@ internal fun PlayerScreenRuntime.persistIsolatedRewatchSnapshot(
                     updatedAtEpochMs = maxOf(capturedAt, current.updatedAtEpochMs)
                 )
             }
-            if (updated == current) return@launch
+            if (updated == current) return@enqueue
             if (RewatchSessionRepository.upsert(profile, updated) &&
                 ProfileRepository.activeProfileId == profile &&
                 rewatchClassifiedKey == playbackKey &&

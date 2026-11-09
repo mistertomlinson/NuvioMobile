@@ -104,6 +104,24 @@ internal fun PlayerScreenRuntime.BindPlayerRuntimeEffects() {
         }
     }
 
+    // A newly selected playback identity must be classified before ANY
+    // normal progress or Simkl scrobble write can run.
+    LaunchedEffect(activePlaybackKey, profileId) {
+        rewatchClassifiedKey = null
+        rewatchClassifiedProfileId = null
+        activeRewatchSession = null
+        try {
+            classifyRewatchBeforeTracking()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            // Stay PENDING on corrupt or inaccessible replay storage. Never
+            // silently reinterpret a replay as normal provider playback.
+            errorMessage = "Could not verify rewatch history. Tracking is paused."
+            println("Player rewatch startup failed: ${error.message}")
+        }
+    }
+
     LaunchedEffect(currentStreamBingeGroup, currentStreamFilename, currentStreamInfoHash, parentMetaId) {
         val bg = currentStreamBingeGroup
         if (bg != null && parentMetaId.isNotBlank()) {
@@ -387,7 +405,12 @@ internal fun PlayerScreenRuntime.BindPlayerRuntimeEffects() {
         activeInitialPositionMs,
         activeInitialProgressFraction,
         initialSeekApplied,
+        rewatchClassifiedKey,
+        rewatchClassifiedProfileId,
     ) {
+        // Prevent an old Simkl resume from seeking a replay before its own
+        // cursor has been loaded from the isolated session repository.
+        if (rewatchWriteMode == PlayerRewatchWriteMode.PENDING) return@LaunchedEffect
         val controller = playerController ?: return@LaunchedEffect
         if (playerControllerSourceUrl != activeSourceUrl) return@LaunchedEffect
         if (initialSeekApplied || playbackSnapshot.isLoading) return@LaunchedEffect
@@ -532,6 +555,8 @@ private fun PlayerScreenRuntime.BindPlayerUiVisibilityEffects() {
         snapshotSignals.isLoading,
         snapshotSignals.isEnded,
         snapshotSignals.durationMs,
+        rewatchClassifiedKey,
+        rewatchClassifiedProfileId,
     ) {
         ServerPlayback.onPlaybackSnapshot(
             url = activeSourceUrl,

@@ -82,6 +82,11 @@ fun recordRewatchProgress(
         updatedAtEpochMs < session.updatedAtEpochMs
     ) return session
 
+    // Ignore zero-position next-up callbacks until actual playback advances.
+    if (session.phase == RewatchPhase.NEXT_UP && positionMs < 1_000L) {
+        return session
+    }
+
     return session.copy(
         positionMs = positionMs.coerceAtLeast(0L),
         durationMs = durationMs.coerceAtLeast(0L),

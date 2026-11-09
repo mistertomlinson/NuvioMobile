@@ -187,6 +187,7 @@ internal class PlayerScreenRuntime(
     var activeRewatchSession by mutableStateOf<RewatchSession?>(null)
     /** Serializes replay writes across seeks, EOF and episode switches. */
     var pendingRewatchSaveJob: Job? = null
+    var pendingRewatchAutoplayHandoff: PlayerRewatchAutoplayHandoff? = null
 
 
     var showSourcesPanel by mutableStateOf(false)

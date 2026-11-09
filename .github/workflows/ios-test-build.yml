@@ -65,6 +65,42 @@ jobs:
           printf '%s' "${RELEASE_PROPERTIES_BASE64}" | base64 --decode > local.properties
           sed -i '' -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
 
+      - name: Refuse incomplete full-release runtime configuration
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          properties = Path("local.properties")
+          required = (
+              "NUVIO_SUPABASE_URL",
+              "NUVIO_SUPABASE_ANON_KEY",
+              "TMDB_API_KEY",
+              "SIMKL_CLIENT_ID",
+          )
+          if not properties.is_file():
+              raise SystemExit(
+                  "::error::Missing local.properties. Configure the fork's "
+                  "NUVIO_LOCAL_PROPERTIES_BASE64 Actions secret before building."
+              )
+
+          configured = {}
+          for raw in properties.read_text().splitlines():
+              line = raw.strip()
+              if not line or line.startswith(("#", "!")) or "=" not in line:
+                  continue
+              name, value = line.split("=", 1)
+              configured[name.strip()] = value.strip()
+          missing = [name for name in required if not configured.get(name)]
+          if missing:
+              raise SystemExit(
+                  "::error::Incomplete 0.6.7 full-release configuration: "
+                  + ", ".join(missing)
+                  + ". Do not distribute this IPA."
+              )
+          print("Required Nuvio, TMDB, and Simkl build keys are present (values hidden).")
+          PY
+
       - name: Prepare iOS dependencies
         run: ./scripts/prepare-ios-dependencies.sh
 

@@ -104,6 +104,27 @@ internal fun PlayerScreenRuntime.BindPlayerRuntimeEffects() {
         }
     }
 
+    LaunchedEffect(
+        playerMeta,
+        metaUiState.meta,
+        activeRewatchSession?.phase,
+        rewatchClassifiedKey,
+    ) {
+        if (activeRewatchSession?.phase ==
+            com.nuvio.app.features.rewatch.RewatchPhase.AWAITING_METADATA
+        ) {
+            try {
+                resolvePendingRewatchMetadata()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                // Leave the pending cursor intact and retry when metadata
+                // changes; never fall back to original Simkl history.
+                println("Player rewatch metadata resolution failed: ${error.message}")
+            }
+        }
+    }
+
     // A newly selected playback identity must be classified before ANY
     // normal progress or Simkl scrobble write can run.
     LaunchedEffect(activePlaybackKey, profileId) {

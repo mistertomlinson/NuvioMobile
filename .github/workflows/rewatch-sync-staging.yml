@@ -1,0 +1,35 @@
+name: Rewatch VPS staging tests
+
+on:
+  push:
+    branches:
+      - prototype/rewatch-vps-staging-20261110
+    paths:
+      - 'services/rewatch-sync/**'
+      - '.github/workflows/rewatch-sync-staging.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Verify isolated replay sync service
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out isolated staging branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check server and storage syntax
+        working-directory: services/rewatch-sync
+        run: |
+          node --check server.mjs
+          node --check store.mjs
+          node --check server.test.mjs
+      - name: Run replay staging regression tests
+        working-directory: services/rewatch-sync
+        run: npm test

@@ -125,8 +125,8 @@ backup="$(sudo -n mktemp -d /tmp/nuvio-rewatch-simkl-rollback.XXXXXXXX)"
 sudo -n cp -p "$installed_dir/server.mjs" "$backup/server.mjs"
 echo "BACKUP_CREATED=YES"
 for name in pairing.mjs simkl-identity.mjs simkl-sessions.mjs; do
-  sudo -n install -o root -g root -m 0644 "$source_dir/$name" "$installed_dir/$name"
   installed_modules+=("$name")
+  sudo -n install -o root -g root -m 0644 "$source_dir/$name" "$installed_dir/$name"
 done
 
 # Replace the entrypoint atomically after all import dependencies are staged.

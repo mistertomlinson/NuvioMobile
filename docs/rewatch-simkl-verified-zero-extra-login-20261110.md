@@ -7,7 +7,7 @@ Decision: **reuse the user's existing Simkl sign-in**. No Nuvio-sync password, o
 - NuvioMobile `SimklAuthRepository.kt` already holds a per-profile access token, checks token expiry, and exposes a token for authorized Simkl calls. `SimklAuthModels.kt` contains `accountId` in both UI and stored auth state.
 - NuvioTV `SimklAuthRepository.kt` already stores a scoped auth token and parses `SimklUserSettingsResponse.account.id`. `SimklAuthModels.kt` stores `accountId`.
 - Both clients are on different Simkl login implementations (iPad authorization-code + PKCE, Android TV PIN). Do not reauthorize solely to start private rewatch sync.
-- Official Simkl API documents authenticated `GET https://api.simkl.com/users/settings` with `account.id` and `account.type` in the response. This **account ID is an identifier, not proof** without a verified Simkl token.
+- Official Simkl API documents authenticated `POST https://api.simkl.com/users/settings` with `account.id` and `account.type` in the response. This **account ID is an identifier, not proof** without a verified Simkl token.
 - Official Simkl AUTH V2 is recommended and V1 retirement is anticipated around April 2027. Keep auth migration separate from replay identity binding.
 - Native Simkl rewatch sessions are documented as PRO/VIP only. The private replay store must remain standalone so free Simkl accounts still work and canonical watched/ratings remain untouched.
 
@@ -15,8 +15,8 @@ Decision: **reuse the user's existing Simkl sign-in**. No Nuvio-sync password, o
 
 1. User signs into Simkl using **Nuvio's existing flow**. Playback and existing Simkl sync remain unchanged.
 2. Client opts in to sending replay data to the personal VPS and posts its **already-issued Simkl access token** over HTTPS to a **bootstrap-only endpoint**. Never put the token in URL/query strings or app logs. A client may also include its registered public Simkl client ID; server accepts only a reviewed allowlist of client IDs.
-3. VPS contacts Simkl *server to server* with that access token and allowed client ID and calls `GET /users/settings`. It accepts only Simkl's successful authenticated response containing a valid stable `account.id`. **Do not trust any account ID supplied by the app.**
-4. On success, the VPS binds the device to a canonical principal `simkl:<account.id>`, issues an opaque random, device-specific, **short-lived** replay-only session credential, and discards the Simkl token without persistence. Store only a cryptographic hash of the replay session credential in server-side registry.
+3. VPS contacts Simkl *server to server* with that access token and allowed client ID and calls `POST /users/settings`. It accepts only Simkl's successful authenticated response containing a valid stable `account.id`. **Do not trust any account ID supplied by the app.**
+4. On success, the VPS binds the device to a canonical principal `simkl:<account.id>`, issues an opaque random, device-specific, **24-hour** replay-only session credential, and discards the Simkl token without persistence. Store only a cryptographic hash of the replay session credential in server-side registry.
 5. Replay APIs accept **only** the scoped VPS credential. The Simkl token does not accompany progress updates. Replay session credentials cannot call Simkl and cannot query another principal.
 6. Every device signed into the same verified Simkl account derives the same server principal automatically; different accounts are strictly isolated. Users on the same iPad/TV must get profile-scoped credentials and local replay state.
 7. For session renewal, repeat Simkl verification using an existing valid Simkl token. A sign-out, profile switch, auth failure, server-side revoke, or account mismatch immediately clears the device's replay-only credential and local in-flight outbox binding. Never send one profile's events using another profile's principal.
@@ -38,3 +38,11 @@ Decision: **reuse the user's existing Simkl sign-in**. No Nuvio-sync password, o
 ## First planned code step
 
 Implement an isolated, dependency-injected **Simkl token verifier** with a fake upstream in tests, a per-device replay credential registry with TTL, and a separate loopback-only HTTP bootstrap route disabled by default. Test it without touching the installed staging daemon. Only after that should we connect app-side network clients and revisit public Caddy routing.
+
+## Staged implementation, November 10, 2026
+
+- `simkl-identity.mjs`: fixed HTTPS upstream, POST settings, server-allowlisted app client IDs, authenticated token verification, strict `account.id`, no trust in app-supplied IDs, network failure and redirect rejection. Test upstream is injected; no real Simkl credentials are used in CI.
+- `simkl-sessions.mjs`: random replay-only tokens hashed at rest, issued per device for 24 hours and revocable. The user's Simkl access token never enters replay JSON.
+- `server.mjs`: optional `/v1/simkl/bootstrap` and `/v1/simkl/revoke` routes; **both are disabled unless explicitly configured**. They are separate from Simkl's watched/ratings APIs.
+- Existing Android TV and iPad apps already store Simkl account identity; automatic silent initialization on in-place upgrade must reuse the saved authorization, without re-running PIN or browser OAuth.
+- Current public `nuviorewatch.duckdns.org` remains a **static HTTPS 503 placeholder**. No public replay endpoint, client credential flow, or app behavior is changed by these commits.

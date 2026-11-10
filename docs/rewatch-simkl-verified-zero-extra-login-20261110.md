@@ -22,7 +22,7 @@ Decision: **reuse the user's existing Simkl sign-in**. No Nuvio-sync password, o
 7. For session renewal, repeat Simkl verification using an existing valid Simkl token. A sign-out, profile switch, auth failure, server-side revoke, or account mismatch immediately clears the device's replay-only credential and local in-flight outbox binding. Never send one profile's events using another profile's principal.
 8. If Simkl or the VPS is offline, existing local rewatch continues and pending changes stay in a per-profile offline outbox. Never silently switch to unauthenticated global sync.
 9. Keep replay reads/writes outside Simkl history/ratings/scrobble writes. In particular, do **not** enable Simkl's PRO-only `?allow_rewatch=yes` flag in this design.
-10. For friends: the UI must disclose that replay progress syncs through the maintainer's personal VPS and offer a user-facing opt-out and device-revoke/clear-data path. No hidden upload by default in distributed builds.
+10. For limited friends-only distribution (approximately three trusted friends): **no extra privacy settings screen, consent dialog, opt-in switch, account registration, or pairing UI**. Once the existing Simkl account is connected and verified, replay sync operates automatically. The maintainer can tell friends directly that rewatch progress is hosted on the personal VPS. Keep server-side device revocation and data deletion available administratively if needed; do not weaken authentication or mix accounts.
 
 ## Implementation security gates
 

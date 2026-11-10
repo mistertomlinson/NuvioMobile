@@ -144,4 +144,39 @@ class RewatchTransportCoordinatorTest {
             coordinator.ensureConnected())
         assertEquals(0, contacts)
     }
+
+    @Test
+    fun revokedReplayCredentialIsDiscardedAndNextAttemptReverifiesExistingSimklLogin() = runBlocking {
+        var bootstraps = 0
+        var reads = 0
+        val api = RewatchVpsApi(RewatchHttpExchange { _, url, _, _ ->
+            when {
+                url.endsWith("/v1/simkl/bootstrap") -> {
+                    bootstraps++
+                    RewatchHttpResponse(201, """
+                        {"schemaVersion":1,"simklAccountId":"12003",
+                         "token":"${"b".repeat(64)}","deviceId":"$deviceId",
+                         "expiresAtEpochMs":1000000}
+                    """.trimIndent())
+                }
+                else -> {
+                    reads++
+                    RewatchHttpResponse(if (reads == 1) 401 else 200,
+                        """{"schemaVersion":1,"items":[]}""")
+                }
+            }
+        })
+        val coordinator = RewatchTransportCoordinator(
+            currentAuthorization = { login },
+            installationIdForProfile = { installationId },
+            clientId = "existing-nuvio-app",
+            api = api,
+            outbox = RewatchSyncOutbox(MemoryOutboxStorage()) { _, _, _ -> true },
+            nowEpochMs = { 1000L }
+        )
+        assertEquals(RewatchVpsReadResult.Unauthorized, coordinator.fetchRemote())
+        assertEquals(1, bootstraps)
+        assertEquals(ReplayBootstrapOutcome.CONNECTED, coordinator.ensureConnected())
+        assertEquals(2, bootstraps)
+    }
 }

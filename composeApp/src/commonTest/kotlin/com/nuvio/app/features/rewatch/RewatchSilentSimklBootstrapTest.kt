@@ -15,6 +15,7 @@ class RewatchSilentSimklBootstrapTest {
         accountId = 12003
     )
     private val receipt = ReplayBootstrapCredential(
+        simklAccountId = "12003",
         token = "a".repeat(64),
         deviceId = "simkl-device:8fc3c156-46b0-4cb2-aae7-00498722ccee",
         expiresAtEpochMs = 100_000L
@@ -163,5 +164,32 @@ class RewatchSilentSimklBootstrapTest {
             cancelled = true
         }
         assertTrue(cancelled)
+    }
+
+    @Test
+    fun differentVerifiedSimklAccountNeverBindsToExistingProfile() = runBlocking {
+        val bootstrap = RewatchSilentSimklBootstrap(
+            currentAuthorization = { existing },
+            installationIdForProfile = { deviceInstallationId },
+            exchange = { _, _ -> receipt.copy(simklAccountId = "99221") },
+            persist = { _, _ -> error("Wrong account must not be committed") },
+            nowEpochMs = { 1000L }
+        )
+        assertEquals(ReplayBootstrapOutcome.VERIFIED_ACCOUNT_MISMATCH,
+            bootstrap.connectExistingProfile())
+    }
+
+    @Test
+    fun previouslyConnectedProfileWithoutCachedAccountIdCanStillInitialize() = runBlocking {
+        var saved = false
+        val bootstrap = RewatchSilentSimklBootstrap(
+            currentAuthorization = { existing.copy(accountId = null) },
+            installationIdForProfile = { deviceInstallationId },
+            exchange = { _, _ -> receipt },
+            persist = { _, _ -> saved = true },
+            nowEpochMs = { 1000L }
+        )
+        assertEquals(ReplayBootstrapOutcome.CONNECTED, bootstrap.connectExistingProfile())
+        assertTrue(saved)
     }
 }

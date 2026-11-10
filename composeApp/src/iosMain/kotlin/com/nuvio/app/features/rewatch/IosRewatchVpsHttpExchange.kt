@@ -5,9 +5,8 @@ import com.nuvio.app.core.network.readBoundedResponseBody
 import io.ktor.client.request.request
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsChannel
-import io.ktor.client.statement.contentLength
 import io.ktor.http.HttpMethod
-import io.ktor.http.headers
+import io.ktor.http.HttpHeaders
 
 /**
  * iPad's dedicated HTTPS replay transport.
@@ -30,16 +29,14 @@ internal object IosRewatchVpsHttpExchange : RewatchHttpExchange {
         val replayHeaders = headers
         val response = client.request(url) {
             this.method = HttpMethod.parse(method)
-            headers {
-                replayHeaders.forEach { (key, value) -> append(key, value) }
-            }
+            replayHeaders.forEach { (key, value) -> headers.append(key, value) }
             if (method == "POST") setBody(body)
         }
         return RewatchHttpResponse(
             status = response.status.value,
             body = readBoundedResponseBody(
                 channel = response.bodyAsChannel(),
-                contentLength = response.contentLength(),
+                contentLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull(),
                 maxBytes = 64 * 1024
             )
         )

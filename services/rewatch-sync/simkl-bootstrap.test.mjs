@@ -14,6 +14,9 @@ const OTHER = 'existing_simkl_logged_in_access_token_33333';
 const CLIENT_A = 'existing-nuvio-ipad-app';
 const CLIENT_B = 'existing-nuvio-android-tv-app';
 const LEGACY = 'legacy-staging-credential-1234567890abcdef';
+const ID_IPAD = '00000000-0000-4000-8000-000000000001';
+const ID_TV = '00000000-0000-4000-8000-000000000002';
+const ID_FRIEND = '00000000-0000-4000-8000-000000000003';
 let eventCounter = 0;
 const ep = { season: 3, episode: 5 };
 const session = {
@@ -72,7 +75,7 @@ async function fixture(task, options = {}) {
     return { status: response.status, data: await response.json() };
   }
   const bootstrap = (accessToken = TOKEN1, clientId = CLIENT_A, extra = {}) =>
-    send('POST', '/v1/simkl/bootstrap', null, { clientId, accessToken, ...extra });
+    send('POST', '/v1/simkl/bootstrap', null, { clientId, accessToken, installationId: ID_IPAD, ...extra });
   const list = token => send('GET', '/v1/rewatches', token);
   const start = (identity, token, revision = 0) => send('POST', '/v1/rewatches/events',
     token, {
@@ -93,7 +96,7 @@ async function fixture(task, options = {}) {
 test('upgrade: already-connected iPad/Android reuse Simkl access tokens without new login', () =>
   fixture(async ({ bootstrap, list, start }) => {
     const ipad = await bootstrap(TOKEN1, CLIENT_A, { accountId: 123456 });
-    const tv = await bootstrap(TOKEN2, CLIENT_B, { accountId: 987654 });
+    const tv = await bootstrap(TOKEN2, CLIENT_B, { accountId: 987654, installationId: ID_TV });
     assert.equal(ipad.status, 201);
     assert.equal(tv.status, 201);
     assert.notEqual(ipad.data.token, tv.data.token);
@@ -109,7 +112,7 @@ test('upgrade: already-connected iPad/Android reuse Simkl access tokens without 
 test('friends using their own Simkl account cannot see another account replay', () =>
   fixture(async ({ bootstrap, list, start }) => {
     const family = (await bootstrap()).data;
-    const friend = (await bootstrap(OTHER, CLIENT_B)).data;
+    const friend = (await bootstrap(OTHER, CLIENT_B, { installationId: ID_FRIEND })).data;
     assert.equal((await start(family, family.token)).status, 200);
     assert.equal((await list(friend.token)).data.items.length, 0);
   })
@@ -135,6 +138,8 @@ test('short-lived credential expiry triggers silent Simkl verification again', (
     assert.equal((await list(first.token)).status, 401);
     // Existing Simkl token is still present in the app. No new login flow.
     const renewed = (await bootstrap()).data;
+    assert.notEqual(first.token, renewed.token);
+    assert.equal(first.deviceId, renewed.deviceId, 'queued offline events keep original device ID');
     assert.equal((await list(renewed.token)).status, 200);
   })
 );
@@ -162,3 +167,44 @@ test('server refuses half-configured Simkl bootstrap', () => {
   }, { simklVerifier: async () => ({ ok: false }) }),
   /configured together/);
 });
+
+test('queued rewatch event from before token renewal still has valid authenticated device ID', () =>
+  fixture(async ({ bootstrap, start, advance }) => {
+    const first = (await bootstrap(TOKEN1, CLIENT_A, { installationId: ID_IPAD })).data;
+    // The app queued this local event offline with first.deviceId.
+    advance(60000);
+    const renewed = (await bootstrap(TOKEN1, CLIENT_A, { installationId: ID_IPAD })).data;
+    assert.equal(first.deviceId, renewed.deviceId);
+    assert.equal((await start(first, renewed.token)).status, 200);
+    assert.equal((await start(first, first.token)).status, 401);
+  })
+);
+
+test('missing, malformed and non-v4 installation IDs fail before any Simkl request', () =>
+  fixture(async ({ bootstrap, requests }) => {
+    for (const installationId of [
+      undefined, null, '', 'device-1',
+      '00000000-0000-1000-8000-000000000001'
+    ]) {
+      const response = await bootstrap(TOKEN1, CLIENT_A, { installationId });
+      assert.equal(response.status, 400);
+      assert.equal(response.data.error, 'invalid_installation_id');
+    }
+    assert.equal(requests(), 0);
+  })
+);
+
+test('same installed device linked to a different verified Simkl user remains isolated', () =>
+  fixture(async ({ bootstrap, list, start }) => {
+    const first = (await bootstrap(TOKEN1, CLIENT_A, {
+      installationId: ID_IPAD
+    })).data;
+    const differentAccount = (await bootstrap(OTHER, CLIENT_A, {
+      installationId: ID_IPAD
+    })).data;
+    assert.notEqual(first.deviceId, differentAccount.deviceId);
+    assert.equal((await start(first, first.token)).status, 200);
+    assert.equal((await list(differentAccount.token)).data.items.length, 0);
+    assert.equal((await list(first.token)).data.items.length, 1);
+  })
+);

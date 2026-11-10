@@ -21,6 +21,7 @@ temp_server=""
 swapped=0
 complete=0
 rollback_success=0
+installed_modules=()
 
 finish() {
   local code=$?
@@ -46,7 +47,8 @@ finish() {
   fi
 
   if [[ "$complete" != 1 && ( "$swapped" == 0 || "$rollback_success" == 1 ) ]]; then
-    for name in pairing.mjs simkl-identity.mjs simkl-sessions.mjs; do
+    # Only remove files THIS invocation installed. Never touch existing files on preflight failure.
+    for name in "${installed_modules[@]}"; do
       sudo -n rm -f -- "$installed_dir/$name" || true
     done
   fi
@@ -124,6 +126,7 @@ sudo -n cp -p "$installed_dir/server.mjs" "$backup/server.mjs"
 echo "BACKUP_CREATED=YES"
 for name in pairing.mjs simkl-identity.mjs simkl-sessions.mjs; do
   sudo -n install -o root -g root -m 0644 "$source_dir/$name" "$installed_dir/$name"
+  installed_modules+=("$name")
 done
 
 # Replace the entrypoint atomically after all import dependencies are staged.

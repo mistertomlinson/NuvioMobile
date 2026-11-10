@@ -37,6 +37,21 @@ jobs:
         run: |
           bash -n scripts/provision-staging.sh
           bash -n scripts/update-staging.sh
+      - name: Verify updater pin guard resolves paths from another directory
+        run: |
+          set -euo pipefail
+          test ! -e /opt/nuvio-rewatch-staging/services/rewatch-sync/server.mjs
+          ROOT="$(pwd)"
+          SHA="$(git rev-parse HEAD)"
+          LOG="$(mktemp)"
+          if (cd /tmp && bash "$ROOT/services/rewatch-sync/scripts/update-staging.sh" "$SHA") >"$LOG" 2>&1; then
+            cat "$LOG"
+            echo "Updater unexpectedly succeeded on unprovisioned runner"
+            exit 1
+          fi
+          cat "$LOG"
+          grep -q "SOURCE_HEAD=${SHA:0:7}" "$LOG"
+          grep -q 'ERROR=EXISTING_STAGING_SERVICE_MISSING' "$LOG"
       - name: Run replay staging regression tests
         working-directory: services/rewatch-sync
         run: npm test

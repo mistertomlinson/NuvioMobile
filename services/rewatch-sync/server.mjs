@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { RewatchStore } from './store.mjs';
+import { PairingRegistry } from './pairing.mjs';
 import { readFile, stat } from 'node:fs/promises';
 
 const digest = s => createHash('sha256').update(s).digest();
@@ -24,7 +25,7 @@ function principalFor(req, credentials) {
   return null;
 }
 
-export function makeServer(store, config) {
+export function makeServer(store, config, { pairingRegistry = null } = {}) {
   // Each device has its own credential and bound server-side person identity.
   const credentials = Object.entries(config).map(([token, binding]) => ({
     digest: digest(token), principal: binding?.principal,
@@ -41,10 +42,53 @@ export function makeServer(store, config) {
     throw Error('Duplicate device identity in staging credentials');
   }
   return http.createServer(async (req, res) => {
-    const identity = principalFor(req, credentials);
+    const path = (req.url ?? '').split('?')[0];
+    // The pairing API is disabled by default. Existing Caddy staging hostname
+    // remains 503-only; do not route public traffic here yet.
+    async function readSmallJson() {
+      let raw = '';
+      for await (const chunk of req) {
+        raw += chunk;
+        if (raw.length > 2048) return { error: 'payload_too_large' };
+      }
+      try { return { value: JSON.parse(raw) }; }
+      catch { return { error: 'invalid_json' }; }
+    }
+    if (pairingRegistry && req.method === 'POST' && path === '/v1/pairing/redeem') {
+      const input = await readSmallJson();
+      if (input.error) {
+        return json(res, input.error === 'payload_too_large' ? 413 : 400,
+          { error: input.error });
+      }
+      const result = await pairingRegistry.redeem(input.value?.invitation);
+      return result.ok
+        ? json(res, 201, {
+            schemaVersion: 1, deviceId: result.credential.deviceId,
+            token: result.credential.token
+          })
+        : json(res, 401, { error: 'invalid_or_expired_invitation' });
+    }
+
+    const legacyIdentity = principalFor(req, credentials);
+    const authorization = /^Bearer ([A-Za-z0-9_.~-]+)$/.exec(req.headers.authorization ?? '');
+    const registryIdentity = authorization && pairingRegistry
+      ? pairingRegistry.identify(authorization[1]) : null;
+    const identity = registryIdentity ?? legacyIdentity;
     if (!identity) return json(res, 401, { error: 'unauthorized' });
     const principal = identity.principal;
-    const path = (req.url ?? '').split('?')[0];
+
+    if (pairingRegistry && req.method === 'POST' && path === '/v1/pairing/invite-linked') {
+      // Only a credential issued by pairing may authorize linked-device invites.
+      // Legacy static tokens cannot silently enroll others.
+      if (!registryIdentity) return json(res, 403, { error: 'pairing_identity_required' });
+      const result = await pairingRegistry.createLinkedDeviceInvite(authorization[1]);
+      return result.ok
+        ? json(res, 201, {
+            schemaVersion: 1, invitation: result.invitation,
+            expiresAtEpochMs: result.expiresAtEpochMs
+          })
+        : json(res, 401, { error: 'unauthorized' });
+    }
     if (req.method === 'GET' && path === '/v1/rewatches') {
       return json(res, 200, { schemaVersion: 1, items: store.list(principal) });
     }
@@ -97,7 +141,17 @@ if (process.argv[1] && import.meta.url === new URL('file://' + process.argv[1]).
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
     throw Error('Invalid port');
   }
-  makeServer(store, config).listen(port, host, () => {
+  // Pairing must be explicitly enabled, with its own private state file.
+  // No public exposure is configured by this change.
+  const pairingFile = process.env.REWATCH_PAIRING_DB_PATH;
+  let pairingRegistry = null;
+  if (pairingFile) {
+    const { isAbsolute } = await import('node:path');
+    if (!isAbsolute(pairingFile)) throw Error('Pairing state must have an absolute path');
+    pairingRegistry = new PairingRegistry(pairingFile);
+    await pairingRegistry.init();
+  }
+  makeServer(store, config, { pairingRegistry }).listen(port, host, () => {
     console.log('Rewatch staging listening on ' + host + ':' + port);
   });
 }

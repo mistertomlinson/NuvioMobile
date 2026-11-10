@@ -55,6 +55,19 @@ jobs:
           cat "$LOG"
           grep -q "SOURCE_HEAD=${SHA:0:7}" "$LOG"
           grep -q 'ERROR=EXISTING_STAGING_SERVICE_MISSING' "$LOG"
+      - name: Verify Caddy preview uses one temporary Caddyfile
+        working-directory: services/rewatch-sync
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          script = Path("scripts/preview-caddy-placeholder.sh").read_text()
+          assert script.count('caddy adapt --config "$tmp/Caddyfile"') == 2
+          assert script.count('caddy validate --config "$tmp/Caddyfile"') == 1
+          assert 'baseline.caddyfile' not in script
+          assert 'candidate.caddyfile' not in script
+          assert 'cat >> "$tmp/Caddyfile"' in script
+          print("CADDY_TEMP_PATH_REGRESSION=PASS")
+          PY
       - name: Run replay staging regression tests
         working-directory: services/rewatch-sync
         run: npm test

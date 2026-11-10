@@ -44,6 +44,7 @@ jobs:
           bash -n scripts/provision-staging.sh
           bash -n scripts/update-staging.sh
           bash -n scripts/update-staging-simkl.sh
+          bash -n scripts/update-staging-stable-device.sh
           bash -n scripts/preview-caddy-placeholder.sh
           bash -n scripts/diagnose-caddy-route-diff.sh
           bash -n scripts/apply-caddy-placeholder.sh
@@ -113,6 +114,31 @@ jobs:
           assert 'systemctl reload caddy' not in s
           assert 'systemctl enable' not in s
           print('SIMKL_STAGING_UPGRADE_GUARDS=PASS')
+          PY
+      - name: Verify stable-device staging update rollback guards
+        working-directory: services/rewatch-sync
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('scripts/update-staging-stable-device.sh').read_text()
+          required = [
+              'old_server_blob="b76752ea40f77c5badf83f8686eb32386863eca4"',
+              'old_sessions_blob="cd612dd12bcbe38c04c5de92f05a7f0315c9cde3"',
+              'ROLLBACK=ATTEMPTED',
+              'ROLLBACK=RESTORED_AND_HEALTHY',
+              'simkl-sessions.mjs" "$install_dir/simkl-sessions.mjs"',
+              'server.mjs" "$install_dir/server.mjs"',
+              'SIMKL_BOOTSTRAP_HTTP=401',
+              'PUBLIC_HTTPS_HTTP=503',
+              'CADDY_CONFIG_CHANGED=NO',
+              'CREDENTIALS_CHANGED=NO',
+              'DATABASE_MIGRATED=NO',
+          ]
+          for item in required:
+              assert item in s, f'Missing stable-device safeguard: {item}'
+          assert 'systemctl reload caddy' not in s
+          assert 'systemctl enable' not in s
+          print('SIMKL_STABLE_DEVICE_UPDATER_GUARDS=PASS')
           PY
       - name: Run replay staging regression tests
         working-directory: services/rewatch-sync

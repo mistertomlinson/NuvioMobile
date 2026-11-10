@@ -32,6 +32,7 @@ jobs:
           node --check server.test.mjs
           node --check scripts/enroll-staging-device.mjs
           node --check scripts/enroll-staging-device.test.mjs
+          node --check scripts/smoke-installed-staging.mjs
       - name: Validate guarded staging provisioner syntax
         working-directory: services/rewatch-sync
         run: |
@@ -55,3 +56,8 @@ jobs:
       - name: Run replay staging regression tests
         working-directory: services/rewatch-sync
         run: npm test
+      - name: End-to-end disposable multi-user smoke against staged modules
+        working-directory: services/rewatch-sync
+        env:
+          REWATCH_SMOKE_ALLOW_TEST_DIR: '1'
+        run: node scripts/smoke-installed-staging.mjs "$PWD"

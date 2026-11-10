@@ -33,6 +33,11 @@ jobs:
           node --check scripts/enroll-staging-device.mjs
           node --check scripts/enroll-staging-device.test.mjs
           node --check scripts/smoke-installed-staging.mjs
+          node --check simkl-identity.mjs
+          node --check simkl-identity.test.mjs
+          node --check simkl-sessions.mjs
+          node --check simkl-sessions.test.mjs
+          node --check simkl-bootstrap.test.mjs
       - name: Validate guarded staging provisioner syntax
         working-directory: services/rewatch-sync
         run: |

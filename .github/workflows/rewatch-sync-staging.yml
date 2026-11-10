@@ -30,6 +30,8 @@ jobs:
           node --check server.mjs
           node --check store.mjs
           node --check server.test.mjs
+          node --check scripts/enroll-staging-device.mjs
+          node --check scripts/enroll-staging-device.test.mjs
       - name: Validate guarded staging provisioner syntax
         working-directory: services/rewatch-sync
         run: bash -n scripts/provision-staging.sh

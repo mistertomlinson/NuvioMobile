@@ -36,6 +36,10 @@ export function makeServer(store, config) {
   )) {
     throw Error('Provision a random 32+-character token with principal and deviceId per device');
   }
+  // Device identities must not be bound to multiple people or tokens.
+  if (new Set(credentials.map(x => x.deviceId)).size !== credentials.length) {
+    throw Error('Duplicate device identity in staging credentials');
+  }
   return http.createServer(async (req, res) => {
     const identity = principalFor(req, credentials);
     if (!identity) return json(res, 401, { error: 'unauthorized' });

@@ -99,6 +99,10 @@ test('upgrade: already-connected iPad/Android reuse Simkl access tokens without 
     const tv = await bootstrap(TOKEN2, CLIENT_B, { accountId: 987654, installationId: ID_TV });
     assert.equal(ipad.status, 201);
     assert.equal(tv.status, 201);
+    // App-supplied account IDs were deliberately wrong: only Simkl's verified
+    // account.id may be returned to the clients for profile binding.
+    assert.equal(ipad.data.simklAccountId, '12003');
+    assert.equal(tv.data.simklAccountId, '12003');
     assert.notEqual(ipad.data.token, tv.data.token);
     assert.notEqual(ipad.data.deviceId, tv.data.deviceId);
     assert.ok(ipad.data.expiresAtEpochMs > 0);
@@ -113,6 +117,7 @@ test('friends using their own Simkl account cannot see another account replay', 
   fixture(async ({ bootstrap, list, start }) => {
     const family = (await bootstrap()).data;
     const friend = (await bootstrap(OTHER, CLIENT_B, { installationId: ID_FRIEND })).data;
+    assert.equal(friend.simklAccountId, '99221');
     assert.equal((await start(family, family.token)).status, 200);
     assert.equal((await list(friend.token)).data.items.length, 0);
   })

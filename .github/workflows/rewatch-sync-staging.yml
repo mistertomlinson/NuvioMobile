@@ -40,6 +40,7 @@ jobs:
           bash -n scripts/update-staging.sh
           bash -n scripts/preview-caddy-placeholder.sh
           bash -n scripts/diagnose-caddy-route-diff.sh
+          bash -n scripts/apply-caddy-placeholder.sh
       - name: Verify updater pin guard resolves paths from another directory
         run: |
           set -euo pipefail
@@ -67,6 +68,21 @@ jobs:
           assert 'candidate.caddyfile' not in script
           assert 'cat >> "$tmp/Caddyfile"' in script
           print("CADDY_TEMP_PATH_REGRESSION=PASS")
+          PY
+      - name: Guard Caddy 503-only installation design
+        working-directory: services/rewatch-sync
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          script = Path("scripts/apply-caddy-placeholder.sh").read_text()
+          assert 'bash "$script_dir/preview-caddy-placeholder.sh" "$pin"' in script
+          assert 'respond "Rewatch sync is not available for public access." 503' in script
+          assert 'reverse_proxy' not in script
+          assert 'sudo -n cp -p "$caddy_path" "$backup_dir/Caddyfile"' in script
+          assert 'sudo -n systemctl reload caddy' in script
+          assert 'ROLLBACK=ATTEMPTED' in script
+          assert 'if [[ "$route_code" != "503" ]]' in script
+          print("FAIL_CLOSED_PLACEHOLDER_GUARDS=PASS")
           PY
       - name: Run replay staging regression tests
         working-directory: services/rewatch-sync

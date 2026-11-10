@@ -88,6 +88,8 @@ export function makeServer(store, config, {
         const issued = await simklCredentials.issue(verified.principal, installationId);
         return json(res, 201, {
           schemaVersion: 1,
+          // Identity comes from verified Simkl /users/settings, never the app.
+          simklAccountId: verified.principal.slice('simkl:'.length),
           token: issued.token,
           deviceId: issued.deviceId,
           expiresAtEpochMs: issued.expiresAtEpochMs

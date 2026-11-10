@@ -2,6 +2,8 @@ import http from 'node:http';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { RewatchStore } from './store.mjs';
 import { PairingRegistry } from './pairing.mjs';
+import { makeSimklVerifier } from './simkl-identity.mjs';
+import { SimklReplayCredentials } from './simkl-sessions.mjs';
 import { readFile, stat } from 'node:fs/promises';
 
 const digest = s => createHash('sha256').update(s).digest();
@@ -25,7 +27,14 @@ function principalFor(req, credentials) {
   return null;
 }
 
-export function makeServer(store, config, { pairingRegistry = null } = {}) {
+export function makeServer(store, config, {
+  pairingRegistry = null,
+  simklVerifier = null,
+  simklCredentials = null
+} = {}) {
+  if (Boolean(simklVerifier) !== Boolean(simklCredentials)) {
+    throw Error('Simkl verifier and credential registry must be configured together');
+  }
   // Each device has its own credential and bound server-side person identity.
   const credentials = Object.entries(config).map(([token, binding]) => ({
     digest: digest(token), principal: binding?.principal,
@@ -54,6 +63,34 @@ export function makeServer(store, config, { pairingRegistry = null } = {}) {
       try { return { value: JSON.parse(raw) }; }
       catch { return { error: 'invalid_json' }; }
     }
+    // Optional automatic upgrade bootstrap. Disabled until explicitly configured.
+    // Existing Simkl sign-in is the ONLY user login.
+    if (simklVerifier && req.method === 'POST' && path === '/v1/simkl/bootstrap') {
+      const input = await readSmallJson();
+      if (input.error) {
+        return json(res, input.error === 'payload_too_large' ? 413 : 400,
+          { error: input.error });
+      }
+      const verified = await simklVerifier({
+        clientId: input.value?.clientId,
+        accessToken: input.value?.accessToken
+      });
+      if (!verified.ok) {
+        return json(res, verified.status, { error: verified.error });
+      }
+      try {
+        const issued = await simklCredentials.issue(verified.principal);
+        return json(res, 201, {
+          schemaVersion: 1,
+          token: issued.token,
+          deviceId: issued.deviceId,
+          expiresAtEpochMs: issued.expiresAtEpochMs
+        });
+      } catch {
+        return json(res, 503, { error: 'credential_store_unavailable' });
+      }
+    }
+
     if (pairingRegistry && req.method === 'POST' && path === '/v1/pairing/redeem') {
       const input = await readSmallJson();
       if (input.error) {
@@ -73,9 +110,17 @@ export function makeServer(store, config, { pairingRegistry = null } = {}) {
     const authorization = /^Bearer ([A-Za-z0-9_.~-]+)$/.exec(req.headers.authorization ?? '');
     const registryIdentity = authorization && pairingRegistry
       ? pairingRegistry.identify(authorization[1]) : null;
-    const identity = registryIdentity ?? legacyIdentity;
+    const simklIdentity = authorization && simklCredentials
+      ? simklCredentials.identify(authorization[1]) : null;
+    const identity = simklIdentity ?? registryIdentity ?? legacyIdentity;
     if (!identity) return json(res, 401, { error: 'unauthorized' });
     const principal = identity.principal;
+
+    if (simklCredentials && req.method === 'POST' && path === '/v1/simkl/revoke') {
+      if (!simklIdentity) return json(res, 403, { error: 'simkl_replay_credential_required' });
+      await simklCredentials.revoke(authorization[1]);
+      return json(res, 200, { status: 'revoked' });
+    }
 
     if (pairingRegistry && req.method === 'POST' && path === '/v1/pairing/invite-linked') {
       // Only a credential issued by pairing may authorize linked-device invites.
@@ -151,7 +196,31 @@ if (process.argv[1] && import.meta.url === new URL('file://' + process.argv[1]).
     pairingRegistry = new PairingRegistry(pairingFile);
     await pairingRegistry.init();
   }
-  makeServer(store, config, { pairingRegistry }).listen(port, host, () => {
+  // Optional zero-extra-login Simkl verification remains OFF by default.
+  // All Simkl access tokens are used ephemerally and are never stored here.
+  const enabled = process.env.REWATCH_SIMKL_BOOTSTRAP === '1';
+  const pairedSettings = [
+    process.env.REWATCH_SIMKL_CLIENT_IDS,
+    process.env.REWATCH_SIMKL_CREDENTIALS_DB_PATH
+  ];
+  if (!enabled && pairedSettings.some(Boolean)) {
+    throw Error('Simkl bootstrap is disabled: remove partial Simkl environment');
+  }
+  let simklVerifier = null;
+  let simklCredentials = null;
+  if (enabled) {
+    const { isAbsolute } = await import('node:path');
+    const ids = (process.env.REWATCH_SIMKL_CLIENT_IDS || '').split(',')
+      .map(x => x.trim()).filter(Boolean);
+    const database = process.env.REWATCH_SIMKL_CREDENTIALS_DB_PATH;
+    if (!database || !isAbsolute(database)) {
+      throw Error('Absolute private Simkl session database path required');
+    }
+    simklVerifier = makeSimklVerifier({ allowedClientIds: ids });
+    simklCredentials = new SimklReplayCredentials(database);
+    await simklCredentials.init();
+  }
+  makeServer(store, config, { pairingRegistry, simklVerifier, simklCredentials }).listen(port, host, () => {
     console.log('Rewatch staging listening on ' + host + ':' + port);
   });
 }

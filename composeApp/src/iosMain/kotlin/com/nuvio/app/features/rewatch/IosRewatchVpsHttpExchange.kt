@@ -27,10 +27,11 @@ internal object IosRewatchVpsHttpExchange : RewatchHttpExchange {
         require(url.startsWith("https://nuviorewatch.duckdns.org/"))
         require(method == "GET" || method == "POST")
         val replayHeaders = headers
+        val requestMethod = method
         val response = client.request(url) {
-            this.method = HttpMethod.parse(method)
+            this.method = HttpMethod.parse(requestMethod)
             replayHeaders.forEach { (key, value) -> headers.append(key, value) }
-            if (method == "POST") setBody(body)
+            if (requestMethod == "POST") setBody(body)
         }
         return RewatchHttpResponse(
             status = response.status.value,

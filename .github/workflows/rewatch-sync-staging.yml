@@ -38,6 +38,7 @@ jobs:
         run: |
           bash -n scripts/provision-staging.sh
           bash -n scripts/update-staging.sh
+          bash -n scripts/preview-caddy-placeholder.sh
       - name: Verify updater pin guard resolves paths from another directory
         run: |
           set -euo pipefail

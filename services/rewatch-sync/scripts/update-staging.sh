@@ -20,6 +20,8 @@ finish() {
     if sudo -n install -o root -g root -m 0644 \
       "$backup_dir/server.mjs" "$target_dir/server.mjs" &&
       sudo -n systemctl restart "$service"; then
+      sudo -n rm -f -- "$target_dir/scripts/enroll-staging-device.mjs" || true
+      sudo -n rmdir -- "$target_dir/scripts" 2>/dev/null || true
       rollback_ok=1
       echo "ROLLBACK=SERVER_CODE_RESTORED"
     else

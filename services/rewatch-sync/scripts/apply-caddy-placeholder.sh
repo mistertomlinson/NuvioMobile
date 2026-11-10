@@ -146,7 +146,7 @@ echo "CADDY_RELOAD=SUCCESS"
 # time; use -k to test the route, then separately report trust verification.
 route_code=""
 for attempt in $(seq 1 15); do
-  route_code="$(curl -k -sS --connect-timeout 2 --max-time 5 -o /dev/null -w '%{http_code}' \
+  route_code="$(curl --noproxy '*' -k -sS --connect-timeout 2 --max-time 5 -o /dev/null -w '%{http_code}' \
     --resolve "$target_host:443:127.0.0.1" "https://$target_host/" 2>/dev/null || true)"
   if [[ "$route_code" == "503" ]]; then break; fi
   sleep 2
@@ -165,14 +165,14 @@ if [[ "$listener" != *'127.0.0.1:8765'* ]] ||
   echo "ERROR=PRIVATE_ORIGIN_LISTENER_CHANGED"
   exit 1
 fi
-origin_code="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' \
+origin_code="$(curl --noproxy '*' -sS --max-time 5 -o /dev/null -w '%{http_code}' \
   http://127.0.0.1:8765/v1/rewatches 2>/dev/null || true)"
 if [[ "$origin_code" != "401" ]]; then
   echo "ERROR=PRIVATE_ORIGIN_AUTH_GUARD_FAILED"
   exit 1
 fi
 echo "PRIVATE_ORIGIN_AUTH_HTTP=401"
-if curl -sS --connect-timeout 2 --max-time 8 -o /dev/null \
+if curl --noproxy '*' -sS --connect-timeout 2 --max-time 8 -o /dev/null \
   --resolve "$target_host:443:127.0.0.1" "https://$target_host/" 2>/dev/null; then
   echo "HTTPS_CERTIFICATE_TRUST=PASS"
 else

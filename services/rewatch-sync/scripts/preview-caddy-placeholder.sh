@@ -31,11 +31,16 @@ fi
 
 tmp="$(mktemp -d /tmp/nuvio-rewatch-caddy-preview.XXXXXXXX)"
 trap 'rm -rf -- "$tmp"' EXIT
-# Baseline remains a private temporary copy, deleted on exit.
-sudo -n cat /etc/caddy/Caddyfile > "$tmp/baseline.caddyfile"
-chmod 600 "$tmp/baseline.caddyfile"
-cp "$tmp/baseline.caddyfile" "$tmp/candidate.caddyfile"
-cat >> "$tmp/candidate.caddyfile" <<'CADDY_SITE'
+# Adapt BOTH snapshots from one identical temporary path.
+# Caddy file_server adds the config path to its automatic hide[] list.
+# Using different names would incorrectly flag that safe generated value.
+sudo -n cat /etc/caddy/Caddyfile > "$tmp/Caddyfile"
+chmod 600 "$tmp/Caddyfile"
+if ! sudo -n caddy adapt --config "$tmp/Caddyfile" --adapter caddyfile > "$tmp/before.json" 2>/dev/null; then
+  echo "RESULT=STOP_EXISTING_ADAPT_FAILED"
+  exit 1
+fi
+cat >> "$tmp/Caddyfile" <<'CADDY_SITE'
 
 # REWATCH-STAGING-PLACEHOLDER-START: deliberately NO reverse_proxy
 nuviorewatch.duckdns.org {
@@ -44,11 +49,7 @@ nuviorewatch.duckdns.org {
 # REWATCH-STAGING-PLACEHOLDER-END
 CADDY_SITE
 
-if ! sudo -n caddy adapt --config "$tmp/baseline.caddyfile" --adapter caddyfile > "$tmp/before.json" 2>/dev/null; then
-  echo "RESULT=STOP_EXISTING_ADAPT_FAILED"
-  exit 1
-fi
-if ! sudo -n caddy adapt --config "$tmp/candidate.caddyfile" --adapter caddyfile > "$tmp/after.json" 2>/dev/null; then
+if ! sudo -n caddy adapt --config "$tmp/Caddyfile" --adapter caddyfile > "$tmp/after.json" 2>/dev/null; then
   echo "RESULT=STOP_CANDIDATE_ADAPT_FAILED"
   exit 1
 fi
@@ -117,7 +118,7 @@ then
   echo "RESULT=STOP_ROUTE_GUARD_FAILED"
   exit 1
 fi
-if ! sudo -n caddy validate --config "$tmp/candidate.caddyfile" --adapter caddyfile > /dev/null 2>&1; then
+if ! sudo -n caddy validate --config "$tmp/Caddyfile" --adapter caddyfile > /dev/null 2>&1; then
   echo "RESULT=STOP_CANDIDATE_VALIDATION_FAILED"
   exit 1
 fi

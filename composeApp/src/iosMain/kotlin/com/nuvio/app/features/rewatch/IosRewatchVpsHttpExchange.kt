@@ -30,7 +30,7 @@ internal object IosRewatchVpsHttpExchange : RewatchHttpExchange {
         val requestMethod = method
         val response = client.request(url) {
             this.method = HttpMethod.parse(requestMethod)
-            replayHeaders.forEach { (key, value) -> headers.append(key, value) }
+            replayHeaders.forEach { (key, value) -> this.headers.append(key, value) }
             if (requestMethod == "POST") setBody(body)
         }
         return RewatchHttpResponse(

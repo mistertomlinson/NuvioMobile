@@ -2,11 +2,11 @@
 # Update only the existing loopback staging service. Roll back on failure.
 set -euo pipefail
 
-source_dir="$(cd -- "$(dirname -- "\${BASH_SOURCE[0]}")/.." && pwd)"
+source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 repo_root="$(cd -- "$source_dir/../.." && pwd)"
 target_dir="/opt/nuvio-rewatch-staging/services/rewatch-sync"
 service="nuvio-rewatch-staging.service"
-expected_head="\${1:-}"
+expected_head="${1:-}"
 backup_dir=""
 installed=0
 success=0

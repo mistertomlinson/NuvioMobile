@@ -3,7 +3,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { RewatchStore } from './store.mjs';
 import { PairingRegistry } from './pairing.mjs';
 import { makeSimklVerifier } from './simkl-identity.mjs';
-import { SimklReplayCredentials } from './simkl-sessions.mjs';
+import { SimklReplayCredentials, isValidClientInstallationId } from './simkl-sessions.mjs';
 import { readFile, stat } from 'node:fs/promises';
 
 const digest = s => createHash('sha256').update(s).digest();
@@ -71,6 +71,12 @@ export function makeServer(store, config, {
         return json(res, input.error === 'payload_too_large' ? 413 : 400,
           { error: input.error });
       }
+      // Client creates this random UUID once per local Nuvio profile.
+      // It is NOT evidence of a Simkl identity; we verify Simkl independently.
+      const installationId = input.value?.installationId;
+      if (!isValidClientInstallationId(installationId)) {
+        return json(res, 400, { error: 'invalid_installation_id' });
+      }
       const verified = await simklVerifier({
         clientId: input.value?.clientId,
         accessToken: input.value?.accessToken
@@ -79,7 +85,7 @@ export function makeServer(store, config, {
         return json(res, verified.status, { error: verified.error });
       }
       try {
-        const issued = await simklCredentials.issue(verified.principal);
+        const issued = await simklCredentials.issue(verified.principal, installationId);
         return json(res, 201, {
           schemaVersion: 1,
           token: issued.token,

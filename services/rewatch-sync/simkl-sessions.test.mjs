@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SimklReplayCredentials } from './simkl-sessions.mjs';
@@ -71,5 +71,23 @@ test('simultaneous replay credential issues keep both accounts', () =>
       registry.issue('simkl:' + (10000 + i))));
     const known = all.filter((entry) => registry.identify(entry.token));
     assert.equal(known.length, 12);
+  })
+);
+
+test('existing world-readable credentials fail closed, not loaded or overwritten', () =>
+  fixture(async ({ registry, file, now }) => {
+    await registry.issue('simkl:112233');
+    await chmod(file, 0o644);
+    const reloaded = new SimklReplayCredentials(file, { now });
+    await assert.rejects(reloaded.init(), /private regular file/);
+  })
+);
+
+test('corrupted credential file is never silently reset', () =>
+  fixture(async ({ registry, file, now }) => {
+    await registry.issue('simkl:112233');
+    await writeFile(file, '{"schemaVersion":1,"devices":{"invalid":{}}}');
+    const reloaded = new SimklReplayCredentials(file, { now });
+    await assert.rejects(reloaded.init(), /corrupted/);
   })
 );

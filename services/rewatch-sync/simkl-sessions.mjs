@@ -8,6 +8,9 @@ const VALID_UUID_V4 = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[
 const VALID_PRINCIPAL = /^simkl:[1-9][0-9]{0,15}$/;
 const clone = value => structuredClone(value);
 
+export const isValidClientInstallationId = value =>
+  typeof value === 'string' && VALID_UUID_V4.test(value);
+
 /**
  * Scoped, revocable, expiring replay tokens. Device identity is long-lived and
  * bound to a verified Simkl principal plus one randomly generated installation UUID.
@@ -95,8 +98,7 @@ export class SimklReplayCredentials {
     if (typeof principal !== 'string' || !VALID_PRINCIPAL.test(principal)) {
       throw Error('Only Simkl-verified principals may obtain credentials');
     }
-    if (typeof clientInstallationId !== 'string' ||
-        !VALID_UUID_V4.test(clientInstallationId)) {
+    if (!isValidClientInstallationId(clientInstallationId)) {
       throw Error('A stable, random v4 client installation ID is required');
     }
     const normalized = clientInstallationId.toLowerCase();

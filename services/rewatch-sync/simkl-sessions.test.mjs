@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SimklReplayCredentials } from './simkl-sessions.mjs';
 
+const installationId = index => '00000000-0000-4000-8000-' + String(index).padStart(12, '0');
+
 async function fixture(task) {
   const dir = await mkdtemp(join(tmpdir(), 'nuvio-simkl-credential-'));
   const file = join(dir, 'sessions.json');
@@ -18,9 +20,9 @@ async function fixture(task) {
 
 test('separate accounts receive unique device-scoped replay credentials', () =>
   fixture(async ({ registry, file }) => {
-    const a = await registry.issue('simkl:99911');
-    const b = await registry.issue('simkl:99911');
-    const c = await registry.issue('simkl:77722');
+    const a = await registry.issue('simkl:99911', installationId(1));
+    const b = await registry.issue('simkl:99911', installationId(2));
+    const c = await registry.issue('simkl:77722', installationId(3));
     assert.notEqual(a.token, b.token);
     assert.notEqual(a.deviceId, b.deviceId);
     assert.equal(registry.identify(a.token).principal, registry.identify(b.token).principal);
@@ -35,7 +37,7 @@ test('separate accounts receive unique device-scoped replay credentials', () =>
 
 test('replay credentials expire without requiring Simkl login again', () =>
   fixture(async ({ registry, advance }) => {
-    const a = await registry.issue('simkl:12345');
+    const a = await registry.issue('simkl:12345', installationId(1));
     advance(59999);
     assert.ok(registry.identify(a.token));
     advance(1);
@@ -45,7 +47,7 @@ test('replay credentials expire without requiring Simkl login again', () =>
 
 test('credentials are durable across restart and revocation survives restart', () =>
   fixture(async ({ registry, file, now }) => {
-    const a = await registry.issue('simkl:11111');
+    const a = await registry.issue('simkl:11111', installationId(1));
     const reopened = new SimklReplayCredentials(file, { now, lifetimeMs: 60000 });
     await reopened.init();
     assert.equal(reopened.identify(a.token)?.principal, 'simkl:11111');
@@ -59,7 +61,7 @@ test('credentials are durable across restart and revocation survives restart', (
 test('invalid or user-claimed account identities never issue session tokens', () =>
   fixture(async ({ registry }) => {
     for (const id of ['simkl:0', 'simkl:00001', 'simkl:bad', 'person:1', '', null]) {
-      await assert.rejects(registry.issue(id));
+      await assert.rejects(registry.issue(id, installationId(1)));
     }
     assert.equal(registry.identify('not-real'), null);
   })
@@ -68,7 +70,7 @@ test('invalid or user-claimed account identities never issue session tokens', ()
 test('simultaneous replay credential issues keep both accounts', () =>
   fixture(async ({ registry }) => {
     const all = await Promise.all(Array.from({ length: 12 }, (_, i) =>
-      registry.issue('simkl:' + (10000 + i))));
+      registry.issue('simkl:' + (10000 + i), installationId(i + 1))));
     const known = all.filter((entry) => registry.identify(entry.token));
     assert.equal(known.length, 12);
   })
@@ -76,7 +78,7 @@ test('simultaneous replay credential issues keep both accounts', () =>
 
 test('existing world-readable credentials fail closed, not loaded or overwritten', () =>
   fixture(async ({ registry, file, now }) => {
-    await registry.issue('simkl:112233');
+    await registry.issue('simkl:112233', installationId(1));
     await chmod(file, 0o644);
     const reloaded = new SimklReplayCredentials(file, { now });
     await assert.rejects(reloaded.init(), /private regular file/);
@@ -85,9 +87,59 @@ test('existing world-readable credentials fail closed, not loaded or overwritten
 
 test('corrupted credential file is never silently reset', () =>
   fixture(async ({ registry, file, now }) => {
-    await registry.issue('simkl:112233');
+    await registry.issue('simkl:112233', installationId(1));
     await writeFile(file, '{"schemaVersion":1,"devices":{"invalid":{}}}');
     const reloaded = new SimklReplayCredentials(file, { now });
     await assert.rejects(reloaded.init(), /corrupted/);
+  })
+);
+
+test('stable installation binding preserves queued offline device identity after expiry and renewal', () =>
+  fixture(async ({ registry, advance, file, now }) => {
+    const first = await registry.issue('simkl:77660', installationId(55));
+    const outboxEventDeviceId = first.deviceId;
+    advance(60000);
+    assert.equal(registry.identify(first.token), null);
+    const reloaded = new SimklReplayCredentials(file, { now, lifetimeMs: 60000 });
+    await reloaded.init();
+    const renewal = await reloaded.issue('simkl:77660', installationId(55));
+    assert.equal(renewal.deviceId, outboxEventDeviceId);
+    assert.equal(reloaded.identify(renewal.token).deviceId, outboxEventDeviceId);
+    assert.equal(reloaded.identify(first.token), null);
+    const disk = await readFile(file, 'utf8');
+    assert.equal(disk.includes(installationId(55)), false);
+    assert.equal(disk.includes(renewal.token), false);
+  })
+);
+
+test('reverification rotates token but retains device ID, invalidating previous credential', () =>
+  fixture(async ({ registry }) => {
+    const first = await registry.issue('simkl:76543', installationId(1));
+    const second = await registry.issue('simkl:76543', installationId(1));
+    assert.notEqual(first.token, second.token);
+    assert.equal(first.deviceId, second.deviceId);
+    assert.equal(registry.identify(first.token), null);
+    assert.equal(registry.identify(second.token).principal, 'simkl:76543');
+  })
+);
+
+test('same client installation UUID does not merge distinct verified Simkl accounts', () =>
+  fixture(async ({ registry }) => {
+    const ownerA = await registry.issue('simkl:23411', installationId(1));
+    const ownerB = await registry.issue('simkl:98918', installationId(1));
+    assert.notEqual(ownerA.deviceId, ownerB.deviceId);
+    assert.notEqual(registry.identify(ownerA.token).principal,
+      registry.identify(ownerB.token).principal);
+    assert.equal(registry.identify(ownerA.token).deviceId, ownerA.deviceId);
+  })
+);
+
+test('malformed device identifiers cannot obtain a replay credential', () =>
+  fixture(async ({ registry }) => {
+    for (const value of ['', 'not-a-uuid', null,
+      '00000000-0000-1000-8000-000000000001']) {
+      await assert.rejects(registry.issue('simkl:12345', value),
+        /stable, random v4/);
+    }
   })
 );

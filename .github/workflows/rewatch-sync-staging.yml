@@ -43,6 +43,7 @@ jobs:
         run: |
           bash -n scripts/provision-staging.sh
           bash -n scripts/update-staging.sh
+          bash -n scripts/update-staging-simkl.sh
           bash -n scripts/preview-caddy-placeholder.sh
           bash -n scripts/diagnose-caddy-route-diff.sh
           bash -n scripts/apply-caddy-placeholder.sh
@@ -88,6 +89,30 @@ jobs:
           assert 'ROLLBACK=ATTEMPTED' in script
           assert 'if [[ "$route_code" != "503" ]]' in script
           print("FAIL_CLOSED_PLACEHOLDER_GUARDS=PASS")
+          PY
+      - name: Guard inactive Simkl staging upgrade rollback
+        working-directory: services/rewatch-sync
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('scripts/update-staging-simkl.sh').read_text()
+          expected = [
+              'expected_installed_blob="3283e6d23c06b25f670e698a92cae53f08d667d6"',
+              'git hash-object "$installed_dir/server.mjs"',
+              'cmp -s "$installed_dir/store.mjs" "$source_dir/store.mjs"',
+              'cmp -s "$installed_dir/package.json" "$source_dir/package.json"',
+              'REWATCH_SIMKL_*', 'installed_modules=()',
+              'for name in "${installed_modules[@]}"',
+              'ROLLBACK=ATTEMPTED', 'ROLLBACK=RESTORED_AND_HEALTHY',
+              'systemctl restart "$unit"', 'SIMKL_BOOTSTRAP=DISABLED',
+              'PUBLIC_HTTPS_HTTP=503', 'SIMKL_BOOTSTRAP_HTTP=401',
+              'CADDY_CONFIG_CHANGED=NO', 'SIMKL_HISTORY_CHANGED=NO'
+          ]
+          for item in expected:
+              assert item in s, f'Missing invariant: {item}'
+          assert 'systemctl reload caddy' not in s
+          assert 'systemctl enable' not in s
+          print('SIMKL_STAGING_UPGRADE_GUARDS=PASS')
           PY
       - name: Run replay staging regression tests
         working-directory: services/rewatch-sync

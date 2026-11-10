@@ -30,6 +30,9 @@ jobs:
           node --check server.mjs
           node --check store.mjs
           node --check server.test.mjs
+      - name: Validate guarded staging provisioner syntax
+        working-directory: services/rewatch-sync
+        run: bash -n scripts/provision-staging.sh
       - name: Run replay staging regression tests
         working-directory: services/rewatch-sync
         run: npm test

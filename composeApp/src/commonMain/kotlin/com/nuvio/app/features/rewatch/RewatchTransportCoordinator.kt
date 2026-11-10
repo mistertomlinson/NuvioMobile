@@ -107,7 +107,7 @@ internal class RewatchTransportCoordinator(
         }
         val lease = currentLease ?: return RewatchOutboxDrainResult.UNAVAILABLE
         if (!valid(lease)) return RewatchOutboxDrainResult.PROFILE_CHANGED
-        return outbox.drain(
+        val result = outbox.drain(
             profileId = lease.profileId,
             simklAccountId = lease.simklAccountId,
             deviceId = lease.credential.deviceId
@@ -115,6 +115,8 @@ internal class RewatchTransportCoordinator(
             if (!valid(lease)) RewatchOutboxSubmitResult.Unauthorized
             else api.submit(lease.credential, event)
         }
+        if (result == RewatchOutboxDrainResult.UNAUTHORIZED) reset()
+        return result
     }
 
     suspend fun fetchRemote(): RewatchVpsReadResult {
@@ -124,6 +126,8 @@ internal class RewatchTransportCoordinator(
         }
         val lease = currentLease ?: return RewatchVpsReadResult.Unavailable
         if (!valid(lease)) return RewatchVpsReadResult.Unauthorized
-        return api.list(lease.credential)
+        val result = api.list(lease.credential)
+        if (result == RewatchVpsReadResult.Unauthorized) reset()
+        return result
     }
 }

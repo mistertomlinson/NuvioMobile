@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -22,10 +22,21 @@ export class SimklReplayCredentials {
 
   async init() {
     try {
+      const status = await lstat(this.file);
+      if (!status.isFile() || (status.mode & 0o077) !== 0) {
+        throw Error('Replay credential store must be a private regular file');
+      }
       const obj = JSON.parse(await readFile(this.file, 'utf8'));
       if (obj.schemaVersion !== 1 || !obj.devices ||
-          typeof obj.devices !== 'object' || Array.isArray(obj.devices)) {
-        throw Error('Unsupported replay credential store');
+          typeof obj.devices !== 'object' || Array.isArray(obj.devices) ||
+          Object.entries(obj.devices).some(([key, item]) =>
+            !/^[a-f0-9]{64}$/.test(key) || !item ||
+            !/^simkl:[1-9][0-9]{0,15}$/.test(item.principal) ||
+            typeof item.deviceId !== 'string' ||
+            !item.deviceId.startsWith('simkl-device:') ||
+            typeof item.revoked !== 'boolean' ||
+            !Number.isSafeInteger(item.expiresAtEpochMs))) {
+        throw Error('Unsupported or corrupted replay credential store');
       }
       this.data = obj;
     } catch (error) {

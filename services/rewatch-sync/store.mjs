@@ -7,7 +7,7 @@ const nonnegative = x => Number.isSafeInteger(x) && x >= 0;
 const positive = x => Number.isSafeInteger(x) && x > 0;
 const episode = x => x && positive(x.season) && positive(x.episode);
 const phases = new Set(['PLAYING', 'NEXT_UP', 'AWAITING_METADATA', 'FINISHED']);
-const VALID_EVENTS = new Set(['START', 'PROGRESS', 'COMPLETE_EPISODE', 'STOP']);
+const VALID_EVENTS = new Set(['START', 'PROGRESS', 'COMPLETE_EPISODE', 'RESOLVE_METADATA', 'IMPORT_SNAPSHOT', 'STOP']);
 const safeKey = (principal, series) => JSON.stringify([principal, series]);
 const hashBody = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = (status, error) => ({ status, body: { error } });
@@ -29,6 +29,29 @@ function sanitizeSession(s) {
   };
 }
 function equalEpisode(a, b) { return a?.season === b?.season && a?.episode === b?.episode; }
+/** Server input is replay-only; never use any client account or local-profile ownerKey. */
+function validImportState(session) {
+  if (!session) return false;
+  if (session.phase === 'NEXT_UP') {
+    return session.positionMs === 0 && session.durationMs === 0 &&
+      episode(session.lastCompletedEpisode) &&
+      successorIsPlausible(session.lastCompletedEpisode, session.episode) &&
+      !equalEpisode(session.lastCompletedEpisode, session.episode);
+  }
+  if (session.phase === 'AWAITING_METADATA') {
+    return session.positionMs === 0 && session.durationMs === 0 &&
+      equalEpisode(session.lastCompletedEpisode, session.episode);
+  }
+  if (session.phase === 'PLAYING') {
+    return session.lastCompletedEpisode == null ||
+      (successorIsPlausible(session.lastCompletedEpisode, session.episode) &&
+      !equalEpisode(session.lastCompletedEpisode, session.episode));
+  }
+  if (session.phase === 'FINISHED') {
+    return true; // An explicitly dismissed local replay may not have a completion.
+  }
+  return false;
+}
 function successorIsPlausible(previous, next) {
   return next == null || (episode(next) && (
     (next.season === previous.season && next.episode > previous.episode) ||
@@ -99,19 +122,34 @@ export class RewatchStore {
       if (event.expectedRevision !== revision) return {
         status: 409, body: { error: 'revision_conflict', current: copy(stored) }
       };
+      if (event.type === 'IMPORT_SNAPSHOT' && stored) {
+        // Existing VPS progress ALWAYS wins the write race. The client must
+        // reconcile the conflict without overwriting its local offline cursor.
+        return fail(409, 'existing_remote_session');
+      }
       if (event.type === 'START' && stored && stored.session.phase !== 'FINISHED') {
         return fail(409, 'active_session_exists');
       }
-      if (event.type !== 'START' && (!stored || stored.session.sessionId !== event.sessionId)) {
+      if (!['START', 'IMPORT_SNAPSHOT'].includes(event.type) &&
+          (!stored || stored.session.sessionId !== event.sessionId)) {
         return fail(409, 'session_mismatch');
       }
       let session;
-      if (event.type === 'START') {
+      if (event.type === 'START' || event.type === 'IMPORT_SNAPSHOT') {
         session = sanitizeSession(event.session);
         if (!session || session.sessionId !== event.sessionId ||
-            session.canonicalSeriesId !== event.canonicalSeriesId ||
-            session.phase !== 'PLAYING' || session.positionMs !== 0 ||
-            session.lastCompletedEpisode !== null) return fail(400, 'invalid_start');
+            session.canonicalSeriesId !== event.canonicalSeriesId) {
+          return fail(400, 'invalid_initial_session');
+        }
+        if (event.type === 'START' &&
+            (session.phase !== 'PLAYING' || session.positionMs !== 0 ||
+            session.durationMs !== 0 || session.lastCompletedEpisode !== null)) {
+          return fail(400, 'invalid_start');
+        }
+        if (event.type === 'IMPORT_SNAPSHOT' &&
+            (!validImportState(session) || event.expectedRevision !== 0)) {
+          return fail(400, 'invalid_import_snapshot');
+        }
       } else {
         session = copy(stored.session);
         if (event.type === 'PROGRESS') {
@@ -131,6 +169,27 @@ export class RewatchStore {
           session = { ...session, lastCompletedEpisode: completed,
             episode: event.resultPhase === 'NEXT_UP' ? { ...event.nextEpisode } : completed,
             phase: event.resultPhase, positionMs: 0, durationMs: 0 };
+        } else if (event.type === 'RESOLVE_METADATA') {
+          if (session.phase !== 'AWAITING_METADATA' ||
+              !equalEpisode(event.completedEpisode, session.lastCompletedEpisode) ||
+              !['NEXT_UP', 'FINISHED'].includes(event.resultPhase)) {
+            return fail(409, 'invalid_metadata_resolution');
+          }
+          if (event.resultPhase === 'NEXT_UP' &&
+              (!episode(event.nextEpisode) ||
+               !successorIsPlausible(session.lastCompletedEpisode, event.nextEpisode) ||
+               equalEpisode(session.lastCompletedEpisode, event.nextEpisode))) {
+            return fail(409, 'invalid_successor');
+          }
+          if (event.resultPhase === 'FINISHED' && event.nextEpisode != null) {
+            return fail(400, 'unexpected_successor');
+          }
+          session = {
+            ...session, phase: event.resultPhase,
+            episode: event.resultPhase === 'NEXT_UP'
+              ? { ...event.nextEpisode } : session.lastCompletedEpisode,
+            positionMs: 0, durationMs: 0
+          };
         } else if (event.type === 'STOP') {
           session.phase = 'FINISHED';
         }

@@ -460,6 +460,17 @@ internal class RewatchSyncOutbox(
             .pending.any { seriesKey(it.canonicalSeriesId) == key }
     }
 
+    /** Preserve the touched series roster before a successful drain so a
+     * fresh authenticated GET can re-certify each local replay afterward. */
+    suspend fun pendingSeriesIds(
+        profileId: Int, simklAccountId: String, deviceId: String
+    ): Set<String> = mutex.withLock {
+        if (!stillCurrent(profileId, simklAccountId, deviceId))
+            return@withLock emptySet()
+        readChecked(profileId, simklAccountId, deviceId)
+            .pending.map { it.canonicalSeriesId.trim().lowercase() }.toSet()
+    }
+
     suspend fun pendingCount(
         profileId: Int, simklAccountId: String, deviceId: String
     ): Int = mutex.withLock {

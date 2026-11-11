@@ -93,4 +93,74 @@ class RewatchSessionRepositoryTest {
             )
         )
     }
+    @Test
+    fun legacyReplayEnvelopeWithoutSyncLedgerLoadsUnchanged() {
+        val old = """{"schemaVersion":1,"sessions":[]}"""
+        val decoded = decodeRewatchSessionEnvelope(old, 2)
+        assertTrue(decoded.sessions.isEmpty())
+        assertEquals(0L, decoded.syncLedger.generation)
+        assertTrue(decoded.syncLedger.cleanBySeries.isEmpty())
+    }
+
+    @Test
+    fun existingReplayPayloadPreservesCleanLedgerInSameEncodedRecord() {
+        val replay = session(owner = "local-profile:2")
+        val verified = RewatchRemoteLookup.Verified(
+            RewatchRemoteCheckpoint.Synced(4, replay.sessionId),
+            replay.copy(updatedAtEpochMs = 0)
+        )
+        val proof = requireNotNull(certifyRewatchLocalClean(
+            listOf(replay), RewatchLocalSyncLedger(generation = 3),
+            2, "12003", "simkl-device:ipad", replay, 3,
+            verified, false
+        ))
+        val roundTrip = decodeRewatchSessionEnvelope(
+            Json.encodeToString(RewatchSessionsEnvelope(
+                sessions = listOf(replay), syncLedger = proof
+            )),
+            profileId = 2
+        )
+        assertEquals(replay, roundTrip.sessions.single())
+        assertEquals(proof, roundTrip.syncLedger)
+    }
+
+    @Test
+    fun localDismissOrSaveInvalidatesCleanReplayProof() {
+        val replay = session(owner = "local-profile:2")
+        val verified = RewatchRemoteLookup.Verified(
+            RewatchRemoteCheckpoint.Synced(4, replay.sessionId),
+            replay.copy(updatedAtEpochMs = 0)
+        )
+        val clean = requireNotNull(certifyRewatchLocalClean(
+            listOf(replay), RewatchLocalSyncLedger(generation = 3),
+            2, "12003", "simkl-device:ipad", replay, 3,
+            verified, false
+        ))
+        val next = onLocalRewatchCommitted(
+            clean, replay.copy(phase = RewatchPhase.FINISHED)
+        )
+        assertEquals(4L, next.generation)
+        assertTrue(next.cleanBySeries.isEmpty())
+    }
+
+    @Test
+    fun forgedSyncOwnerInEnvelopeFailsClosedOnLoad() {
+        val replay = session(owner = "local-profile:2")
+        val verified = RewatchRemoteLookup.Verified(
+            RewatchRemoteCheckpoint.Synced(4, replay.sessionId),
+            replay.copy(updatedAtEpochMs = 0)
+        )
+        val proof = requireNotNull(certifyRewatchLocalClean(
+            listOf(replay), RewatchLocalSyncLedger(generation = 3),
+            2, "12003", "simkl-device:ipad", replay, 3,
+            verified, false
+        ))
+        val tampered = Json.encodeToString(RewatchSessionsEnvelope(
+            sessions = listOf(replay), syncLedger = proof
+        )).replace("local-profile:2", "local-profile:3")
+        assertFailsWith<IllegalArgumentException> {
+            decodeRewatchSessionEnvelope(tampered, 2)
+        }
+    }
+
 }

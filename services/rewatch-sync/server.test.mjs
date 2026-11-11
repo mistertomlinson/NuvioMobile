@@ -149,3 +149,149 @@ test('weak tokens or incomplete device bindings are rejected', () => {
     [tokens.ipad]: { principal: 'person-A' }
   }));
 });
+
+test('in-place upgrade imports existing NEXT_UP rewatch without losing its episode', () =>
+  fixture(async ({ request }) => {
+    const existing = {
+      ...initial,
+      sessionId: 'office-local-rewatch',
+      episode: { season: 3, episode: 18 },
+      lastCompletedEpisode: { season: 3, episode: 17 },
+      phase: 'NEXT_UP'
+    };
+    const imported = await post(request, tokens.ipad, event('IMPORT_SNAPSHOT', 0, {
+      eventId: 'upgrade-next-up',
+      sessionId: existing.sessionId,
+      session: existing,
+      // Untrusted device-local identifiers must not become authorization.
+      ownerKey: 'local-profile:9999'
+    }));
+    assert.equal(imported.status, 200);
+    assert.equal(imported.body.revision, 1);
+    assert.deepEqual(imported.body.session.episode, { season: 3, episode: 18 });
+    assert.deepEqual(imported.body.session.lastCompletedEpisode,
+      { season: 3, episode: 17 });
+    assert.equal(imported.body.session.phase, 'NEXT_UP');
+    assert.equal(imported.body.session.ownerKey, undefined);
+    assert.equal((await list(request, tokens.tv)).body.items.length, 1);
+    assert.equal((await list(request, tokens.other)).body.items.length, 0);
+  })
+);
+
+test('in-place upgrade imports paused episode and terminal tombstone', () =>
+  fixture(async ({ request }) => {
+    const paused = await post(request, tokens.ipad, event('IMPORT_SNAPSHOT', 0, {
+      eventId: 'import-paused',
+      session: { ...initial, positionMs: 65000, durationMs: 1800000 }
+    }));
+    assert.equal(paused.status, 200);
+    assert.equal(paused.body.session.positionMs, 65000);
+    const tombstone = {
+      ...initial, sessionId: 'session-finished',
+      canonicalSeriesId: 'imdb:tt0944947',
+      phase: 'FINISHED'
+    };
+    const finished = await post(request, tokens.ipad, {
+      ...event('IMPORT_SNAPSHOT', 0, {
+        eventId: 'import-finished',
+        sessionId: tombstone.sessionId,
+        canonicalSeriesId: tombstone.canonicalSeriesId
+      }),
+      session: tombstone
+    });
+    assert.equal(finished.status, 200);
+    assert.equal(finished.body.session.phase, 'FINISHED');
+    assert.equal((await list(request, tokens.tv)).body.items.length, 2);
+  })
+);
+
+test('existing remote progress cannot be overwritten by initial offline import', () =>
+  fixture(async ({ request }) => {
+    const first = await post(request, tokens.tv, event('START', 0, {
+      eventId: 'remote-start', deviceId: 'tv-1', session: initial
+    }));
+    assert.equal(first.status, 200);
+    const fromIpad = await post(request, tokens.ipad,
+      event('IMPORT_SNAPSHOT', 0, {
+        eventId: 'stale-import',
+        sessionId: 'another-local-session',
+        session: { ...initial, sessionId: 'another-local-session',
+          episode: { season: 3, episode: 19 }, phase: 'NEXT_UP',
+          lastCompletedEpisode: { season: 3, episode: 18 } }
+      }));
+    assert.equal(fromIpad.status, 409);
+    assert.equal((await list(request, tokens.tv)).body.items[0].session.episode.episode, 5);
+  })
+);
+
+test('invalid imported cursor never erases the existing server database', () =>
+  fixture(async ({ request }) => {
+    for (const [id, altered] of [
+      ['no-last-completed', { ...initial, phase: 'NEXT_UP' }],
+      ['same-last-completed', { ...initial, phase: 'NEXT_UP',
+        lastCompletedEpisode: initial.episode }],
+      ['bad-awaiting', { ...initial, phase: 'AWAITING_METADATA',
+        lastCompletedEpisode: { season: 2, episode: 9 } }],
+      ['bad-position', { ...initial, phase: 'NEXT_UP',
+        lastCompletedEpisode: { season: 3, episode: 4 },
+        positionMs: 18000 }]
+    ]) {
+      const result = await post(request, tokens.ipad, event('IMPORT_SNAPSHOT', 0, {
+        eventId: id,
+        session: altered
+      }));
+      assert.equal(result.status, 400, id);
+    }
+    assert.equal((await list(request, tokens.ipad)).body.items.length, 0);
+  })
+);
+
+test('late metadata resolution advances existing AWAITING_METADATA replay once', () =>
+  fixture(async ({ request }) => {
+    assert.equal((await post(request, tokens.ipad,
+      event('START', 0, { session: initial }))).status, 200);
+    const awaiting = await post(request, tokens.ipad,
+      event('COMPLETE_EPISODE', 1, {
+        episode: initial.episode, resultPhase: 'AWAITING_METADATA'
+      }));
+    assert.equal(awaiting.status, 200);
+    assert.equal(awaiting.body.session.phase, 'AWAITING_METADATA');
+    const resolution = event('RESOLVE_METADATA', 2, {
+      eventId: 'resolve-episode',
+      deviceId: 'tv-1',
+      completedEpisode: initial.episode,
+      resultPhase: 'NEXT_UP',
+      nextEpisode: { season: 3, episode: 6 }
+    });
+    const resolved = await post(request, tokens.tv, resolution);
+    assert.equal(resolved.status, 200);
+    assert.equal(resolved.body.session.phase, 'NEXT_UP');
+    assert.equal(resolved.body.session.episode.episode, 6);
+    assert.deepEqual(await post(request, tokens.tv, resolution), resolved);
+    assert.equal((await post(request, tokens.ipad, event('RESOLVE_METADATA', 2, {
+      eventId: 'stale-second-resolution',
+      completedEpisode: initial.episode,
+      resultPhase: 'FINISHED'
+    }))).status, 409);
+    assert.equal((await list(request, tokens.ipad)).body.items[0].session.episode.episode, 6);
+  })
+);
+
+test('late metadata cannot jump backward or resolve before a real completion', () =>
+  fixture(async ({ request }) => {
+    await post(request, tokens.ipad, event('START', 0, { session: initial }));
+    assert.equal((await post(request, tokens.ipad, event('RESOLVE_METADATA', 1, {
+      completedEpisode: initial.episode, resultPhase: 'NEXT_UP',
+      nextEpisode: { season: 3, episode: 6 }
+    }))).status, 409);
+    await post(request, tokens.ipad, event('COMPLETE_EPISODE', 1, {
+      episode: initial.episode, resultPhase: 'AWAITING_METADATA'
+    }));
+    assert.equal((await post(request, tokens.ipad, event('RESOLVE_METADATA', 2, {
+      completedEpisode: initial.episode, resultPhase: 'NEXT_UP',
+      nextEpisode: { season: 3, episode: 4 }
+    }))).status, 409);
+    assert.equal((await list(request, tokens.ipad)).body.items[0].session.phase,
+      'AWAITING_METADATA');
+  })
+);

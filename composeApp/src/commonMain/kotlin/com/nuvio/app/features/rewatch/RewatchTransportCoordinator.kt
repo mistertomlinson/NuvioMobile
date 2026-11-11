@@ -127,7 +127,33 @@ internal class RewatchTransportCoordinator(
         val lease = currentLease ?: return RewatchVpsReadResult.Unavailable
         if (!valid(lease)) return RewatchVpsReadResult.Unauthorized
         val result = api.list(lease.credential)
+        // Do not return an old account's replay JSON after a profile switch,
+        // logout or token renewal that happened during the network request.
+        if (currentLease !== lease || !valid(lease)) {
+            return RewatchVpsReadResult.Unauthorized
+        }
         if (result == RewatchVpsReadResult.Unauthorized) reset()
         return result
+    }
+
+    /**
+     * Use ONLY authenticated, post-request-profile-checked VPS JSON to decide
+     * whether a particular series has an empty remote slot or known revision.
+     * A failure returns Invalid; it must not prompt an initial IMPORT.
+     */
+    suspend fun fetchCheckpointForSeries(
+        canonicalSeriesId: String
+    ): RewatchRemoteLookup {
+        val result = fetchRemote()
+        if (result !is RewatchVpsReadResult.Received) {
+            return RewatchRemoteLookup.Invalid
+        }
+        val lease = currentLease ?: return RewatchRemoteLookup.Invalid
+        if (!valid(lease)) return RewatchRemoteLookup.Invalid
+        return readVerifiedRewatchCheckpoint(
+            payload = result.json,
+            expectedCanonicalSeriesId = canonicalSeriesId,
+            currentOwnerKey = "local-profile:${lease.profileId}"
+        )
     }
 }

@@ -97,8 +97,10 @@ internal object IosRewatchSyncRuntime {
     }
 
     /** Returns false until end-to-end tests authorize an explicit rollout. */
-    fun activateAfterValidatedRollout(): Boolean =
-        RewatchIpadCommitHandoff.installAfterValidation(committedSaveSink)
+    fun activateAfterValidatedRollout(): Boolean {
+        if (!RewatchMobileSyncGate.ENABLED) return false
+        return RewatchIpadCommitHandoff.installAfterValidation(committedSaveSink)
+    }
 
     private suspend fun ensureOnlineIdentity(): RewatchCommitIdentity? {
         if (transport.ensureConnected() != ReplayBootstrapOutcome.CONNECTED)

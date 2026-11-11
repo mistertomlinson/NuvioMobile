@@ -159,7 +159,7 @@ class RewatchLocalSyncLedgerTest {
     }
 
     @Test fun malformedCleanProofFailsClosedInsteadOfResetting() {
-        val saved = Json.encodeToString(clean())
+        val saved = Json { encodeDefaults = true }.encodeToString(clean())
         assertFailsWith<IllegalArgumentException> {
             validateRewatchLocalSyncLedger(Json.decodeFromString<RewatchLocalSyncLedger>(
                 saved.replace("local-profile:2", "local-profile:3")), 2

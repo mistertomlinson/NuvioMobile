@@ -1,0 +1,188 @@
+package com.nuvio.app.features.rewatch
+
+import com.nuvio.app.features.simkl.SimklConfig
+import com.nuvio.app.features.simkl.SimklPlatformClock
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import platform.Foundation.NSUUID
+
+/**
+ * iPad-only demand-driven replay synchronization composition.
+ * Does NOT install on startup. The compile-time rollout gate remains OFF.
+ *
+ * Uses the already saved, profile-scoped Simkl authorization; neither
+ * the replay token nor the original watched-history cursor is persisted.
+ */
+internal object IosRewatchSyncRuntime {
+    private val mutex = Mutex()
+    private var boundAuth: ExistingSimklRewatchAuthorization? = null
+    private var boundIdentity: RewatchCommitIdentity? = null
+    private val knownCheckpoints = mutableMapOf<String, RewatchRemoteCheckpoint>()
+
+    private fun key(series: String) = series.trim().lowercase()
+
+    private fun currentIdentity(): RewatchCommitIdentity? {
+        val auth = RewatchExistingSimklAuthorization.snapshot() ?: return null
+        val identity = boundIdentity ?: return null
+        return identity.takeIf {
+            boundAuth == auth &&
+                auth.accountId?.toString() == it.simklAccountId &&
+                auth.profileId == it.profileId
+        }
+    }
+
+    private fun bind(
+        auth: ExistingSimklRewatchAuthorization,
+        identity: RewatchCommitIdentity
+    ) {
+        if (RewatchExistingSimklAuthorization.snapshot() != auth ||
+            auth.profileId != identity.profileId ||
+            auth.accountId?.toString() != identity.simklAccountId) return
+        if (boundAuth != auth || boundIdentity != identity) {
+            knownCheckpoints.clear()
+        }
+        boundAuth = auth
+        boundIdentity = identity
+    }
+
+    private val outbox by lazy {
+        RewatchSyncOutbox(IosRewatchOutboxStorage) { profileId, accountId, deviceId ->
+            val identity = currentIdentity()
+            identity?.profileId == profileId &&
+                identity.simklAccountId == accountId &&
+                identity.deviceId == deviceId
+        }
+    }
+
+    private val transport by lazy {
+        RewatchTransportCoordinator(
+            currentAuthorization = { RewatchExistingSimklAuthorization.snapshot() },
+            installationIdForProfile = { IosRewatchOutboxStorage.installationId(it) },
+            clientId = SimklConfig.CLIENT_ID,
+            api = RewatchVpsApi(IosRewatchVpsHttpExchange),
+            outbox = outbox,
+            nowEpochMs = { SimklPlatformClock.nowEpochMs() }
+        )
+    }
+
+    private suspend fun identityForOfflineSave(): RewatchCommitIdentity? {
+        val auth = RewatchExistingSimklAuthorization.snapshot() ?: return null
+        val account = auth.accountId?.takeIf { it > 0 }?.toString() ?: return null
+        currentIdentity()?.takeIf {
+            it.profileId == auth.profileId && it.simklAccountId == account
+        }?.let { return it }
+        val online = transport.currentVerifiedIdentity()?.takeIf {
+            it.profileId == auth.profileId && it.simklAccountId == account
+        }
+        val identity = online ?: run {
+            val stored = outbox.knownDeviceIdForAccount(auth.profileId, account)
+                ?: return null
+            RewatchCommitIdentity(auth.profileId, account, stored)
+        }
+        if (RewatchExistingSimklAuthorization.snapshot() != auth) return null
+        bind(auth, identity)
+        return currentIdentity()
+    }
+
+    val committedSaveSink: RewatchCommittedSaveSink by lazy {
+        RewatchCommittedOutboxSink(
+            currentIdentity = { identityForOfflineSave() },
+            checkpoint = { _, series ->
+                knownCheckpoints[key(series)] ?: RewatchRemoteCheckpoint.Unknown
+            },
+            outbox = outbox,
+            eventId = { NSUUID().UUIDString }
+        )
+    }
+
+    /** Returns false until end-to-end tests authorize an explicit rollout. */
+    fun activateAfterValidatedRollout(): Boolean =
+        RewatchIpadCommitHandoff.installAfterValidation(committedSaveSink)
+
+    private suspend fun ensureOnlineIdentity(): RewatchCommitIdentity? {
+        if (transport.ensureConnected() != ReplayBootstrapOutcome.CONNECTED)
+            return null
+        val auth = RewatchExistingSimklAuthorization.snapshot() ?: return null
+        val id = transport.currentVerifiedIdentity() ?: return null
+        bind(auth, id)
+        return currentIdentity()
+    }
+
+    /**
+     * No automatic polling. Call only from an explicitly enabled future
+     * refresh hook. Every incoming update compares the local mutation
+     * generation under RewatchSessionRepository's existing mutex.
+     */
+    suspend fun pullSeries(series: String): Boolean = mutex.withLock {
+        if (!RewatchMobileSyncGate.ENABLED || series.isBlank()) return@withLock false
+        try {
+            val identity = ensureOnlineIdentity() ?: return@withLock false
+            fun current() = currentIdentity() == identity
+            val observed = RewatchSessionRepository.observeSync(identity.profileId)
+            if (!current()) return@withLock false
+            val result = transport.fetchCheckpointForSeries(series)
+            if (!current()) return@withLock false
+            val verified = result as? RewatchRemoteLookup.Verified
+                ?: return@withLock false
+            knownCheckpoints[key(series)] = verified.checkpoint
+            val remote = verified.remoteSession ?: return@withLock false
+            if (verified.checkpoint !is RewatchRemoteCheckpoint.Synced)
+                return@withLock false
+            val pending = outbox.hasPendingForSeries(
+                identity.profileId, identity.simklAccountId,
+                identity.deviceId, series
+            )
+            if (pending || !current()) return@withLock false
+            val local = observed.sessions.singleOrNull {
+                it.canonicalSeriesId.trim().equals(series.trim(), ignoreCase = true)
+            }
+            val applied = if (local != null && sameRewatchCursor(local, remote)) {
+                RewatchSessionRepository.certifyAuthenticatedRemoteMatch(
+                    profileId = identity.profileId,
+                    simklAccountId = identity.simklAccountId,
+                    deviceId = identity.deviceId,
+                    expectedLocal = local,
+                    expectedGeneration = observed.generation,
+                    remote = verified,
+                    pendingOrUnpublished = false,
+                    stillAuthenticated = ::current
+                )
+            } else {
+                RewatchSessionRepository.applyAuthenticatedRemoteIfClean(
+                    profileId = identity.profileId,
+                    simklAccountId = identity.simklAccountId,
+                    deviceId = identity.deviceId,
+                    canonicalSeriesId = series,
+                    observed = observed,
+                    remote = verified,
+                    pendingOrUnpublished = false,
+                    nowEpochMs = SimklPlatformClock.nowEpochMs(),
+                    stillAuthenticated = ::current
+                )
+            }
+            if (!applied || !current()) return@withLock false
+            val persisted = RewatchSessionRepository.observeSync(identity.profileId)
+                .sessions.singleOrNull {
+                    it.canonicalSeriesId.trim().equals(series.trim(), ignoreCase = true)
+                }
+            if (persisted != null && sameRewatchCursor(persisted, remote) && current()) {
+                outbox.recordVerifiedCleanBaseline(
+                    identity.profileId, identity.simklAccountId,
+                    identity.deviceId, persisted, verified
+                )
+            } else false
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    suspend fun uploadPending(): RewatchOutboxDrainResult {
+        if (!RewatchMobileSyncGate.ENABLED) return RewatchOutboxDrainResult.UNAVAILABLE
+        val identity = ensureOnlineIdentity() ?: return RewatchOutboxDrainResult.UNAVAILABLE
+        if (currentIdentity() != identity) return RewatchOutboxDrainResult.PROFILE_CHANGED
+        return transport.submitPending()
+    }
+}

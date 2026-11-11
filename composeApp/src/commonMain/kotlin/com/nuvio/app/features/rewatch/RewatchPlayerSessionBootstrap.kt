@@ -17,7 +17,8 @@ internal suspend fun resolveOrStartRewatchForPlayback(
     episode: RewatchEpisode,
     wasPreviouslyWatched: suspend () -> Boolean,
     createSessionId: () -> String,
-    nowEpochMs: () -> Long
+    nowEpochMs: () -> Long,
+    onCommitted: suspend (RewatchSession?, RewatchSession) -> Unit = { _, _ -> }
 ): RewatchSession? {
     require(expectedProfileId > 0)
     require(ownerKey.isNotBlank())
@@ -73,5 +74,12 @@ internal suspend fun resolveOrStartRewatchForPlayback(
         replaceSession = recorded?.phase == RewatchPhase.FINISHED
     )
     if (!accepted || activeProfileId() != expectedProfileId) return null
+    try {
+        onCommitted(recorded, started)
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        // Optional replay sync must never affect an already durable start.
+    }
     return started
 }

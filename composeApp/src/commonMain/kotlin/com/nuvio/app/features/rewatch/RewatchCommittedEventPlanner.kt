@@ -109,8 +109,9 @@ internal fun planCommittedRewatchEvent(
     } else {
         checkpoint as RewatchRemoteCheckpoint.Synced
         if (before == null || before.sessionId != checkpoint.sessionId ||
-            before.canonicalSeriesId.trim() != after.canonicalSeriesId.trim() ||
-            before.ownerKey != after.ownerKey) return null
+            !before.canonicalSeriesId.trim().equals(
+                after.canonicalSeriesId.trim(), ignoreCase = true
+            ) || before.ownerKey != after.ownerKey) return null
 
         if (before.sessionId != after.sessionId) {
             if (before.phase != RewatchPhase.FINISHED ||

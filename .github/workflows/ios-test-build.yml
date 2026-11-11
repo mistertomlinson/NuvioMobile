@@ -200,3 +200,52 @@ jobs:
           path: build/ios-ipa/*.ipa
           if-no-files-found: error
           retention-days: 7
+
+  android-rewatch-checkpoint:
+    name: Validate Android TV replay checkpoint branch
+    if: github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out pinned Android TV replay branch
+        uses: actions/checkout@v4
+        with:
+          repository: mistertomlinson/NuvioTV
+          ref: 88d2973ec91cf1fb5fb251fa8b316185b1d98a54
+      - name: Verify expected Android source commit
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "88d2973ec91cf1fb5fb251fa8b316185b1d98a54"
+          echo "ANDROID_SOURCE_HEAD=$(git rev-parse --short HEAD)"
+      - name: Configure Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Configure Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install Android SDK platform
+        run: sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Run Android TV replay planner and transport tests
+        shell: bash
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :app:testSideloadUnitTest \
+            --tests '*RewatchCommittedEventPlannerTest' \
+            --tests '*RewatchRemoteCheckpointReaderTest' \
+            --tests '*RewatchTransportCoordinatorTest' \
+            --tests '*RewatchSyncOutboxTest' \
+            --tests '*RewatchVpsApiTest' \
+            --tests '*RewatchSilentSimklBootstrapTest' \
+            --no-daemon --console=plain
+      - name: Summarize Android regression validation
+        run: |
+          {
+            echo '## Android TV replay planner and checkpoint tests'
+            echo 'RESULT=ANDROID_REWATCH_CHECKPOINT_TESTS_PASSED'
+            echo 'Source: mistertomlinson/NuvioTV'
+            echo "HEAD=$(git rev-parse --short HEAD)"
+            echo 'VPS=UNTOUCHED'
+            echo 'INSTALLED_APPS=UNTOUCHED'
+          } >> "$GITHUB_STEP_SUMMARY"

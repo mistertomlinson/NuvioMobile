@@ -55,3 +55,42 @@ internal suspend fun notifyCommittedRewatchSave(
         // into an ordinary Simkl history mutation.
     }
 }
+
+/** Non-secret binding from a verified Simkl account and existing Nuvio device. */
+internal data class RewatchCommitIdentity(
+    val profileId: Int,
+    val simklAccountId: String,
+    val deviceId: String
+)
+
+/**
+ * No-network iPad bridge: only a committed local write, a matching saved
+ * Simkl account/device, and a verified checkpoint (or persisted acknowledgment)
+ * may add an offline event. No event is uploaded from this callback.
+ */
+internal class RewatchCommittedOutboxSink(
+    private val currentIdentity: suspend () -> RewatchCommitIdentity?,
+    private val checkpoint: (RewatchCommitIdentity, String) -> RewatchRemoteCheckpoint,
+    private val outbox: RewatchSyncOutbox,
+    private val eventId: () -> String
+) : RewatchCommittedSaveSink {
+    override suspend fun committed(
+        profileId: Int,
+        before: RewatchSession?,
+        after: RewatchSession
+    ) {
+        val identity = currentIdentity() ?: return
+        if (identity.profileId != profileId) return
+        val proof = checkpoint(identity, after.canonicalSeriesId)
+        if (currentIdentity() != identity) return
+        outbox.enqueueCommittedTransition(
+            profileId = profileId,
+            simklAccountId = identity.simklAccountId,
+            deviceId = identity.deviceId,
+            before = before,
+            after = after,
+            checkpoint = proof,
+            eventId = eventId()
+        )
+    }
+}

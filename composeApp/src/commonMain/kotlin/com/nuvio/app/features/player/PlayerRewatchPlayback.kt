@@ -4,6 +4,8 @@ import com.nuvio.app.isIos
 import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.rewatch.RewatchEpisode
 import com.nuvio.app.features.rewatch.RewatchSession
+import com.nuvio.app.features.rewatch.RewatchIpadCommitHandoff
+import com.nuvio.app.features.rewatch.notifyCommittedRewatchSave
 import com.nuvio.app.features.rewatch.RewatchSaveCoordinator
 import com.nuvio.app.features.rewatch.RewatchSessionRepository
 import com.nuvio.app.features.rewatch.RewatchPhase
@@ -102,7 +104,17 @@ internal suspend fun PlayerScreenRuntime.classifyRewatchBeforeTracking() {
             createSessionId = {
                 "ios-$selectedProfile-${WatchProgressClock.nowEpochMs()}-${Random.nextLong()}"
             },
-            nowEpochMs = { WatchProgressClock.nowEpochMs() }
+            nowEpochMs = { WatchProgressClock.nowEpochMs() },
+            onCommitted = { before, after ->
+                notifyCommittedRewatchSave(
+                    sink = RewatchIpadCommitHandoff.sink,
+                    accepted = true,
+                    profileId = selectedProfile,
+                    activeProfileId = { ProfileRepository.activeProfileId },
+                    before = before,
+                    after = after
+                )
+            }
         )
     }
     if (key != activePlaybackKey ||
@@ -207,8 +219,18 @@ internal fun PlayerScreenRuntime.persistIsolatedRewatchSnapshot(
                 )
             }
             if (updated == current) return@enqueue
-            if (RewatchSessionRepository.upsert(profile, updated) &&
-                ProfileRepository.activeProfileId == profile &&
+            val accepted = RewatchSessionRepository.upsert(profile, updated)
+            if (accepted) {
+                notifyCommittedRewatchSave(
+                    sink = RewatchIpadCommitHandoff.sink,
+                    accepted = true,
+                    profileId = profile,
+                    activeProfileId = { ProfileRepository.activeProfileId },
+                    before = current,
+                    after = updated
+                )
+            }
+            if (accepted && ProfileRepository.activeProfileId == profile &&
                 rewatchClassifiedKey == playbackKey &&
                 activeRewatchSession?.sessionId == updated.sessionId
             ) {
@@ -255,8 +277,18 @@ internal suspend fun PlayerScreenRuntime.resolvePendingRewatchMetadata() {
         metadataComplete = true
     )
     if (updated == session || key != activePlaybackKey) return
-    if (RewatchSessionRepository.upsert(profile, updated) &&
-        ProfileRepository.activeProfileId == profile &&
+    val accepted = RewatchSessionRepository.upsert(profile, updated)
+    if (accepted) {
+        notifyCommittedRewatchSave(
+            sink = RewatchIpadCommitHandoff.sink,
+            accepted = true,
+            profileId = profile,
+            activeProfileId = { ProfileRepository.activeProfileId },
+            before = session,
+            after = updated
+        )
+    }
+    if (accepted && ProfileRepository.activeProfileId == profile &&
         key == activePlaybackKey &&
         activeRewatchSession?.sessionId == updated.sessionId
     ) {

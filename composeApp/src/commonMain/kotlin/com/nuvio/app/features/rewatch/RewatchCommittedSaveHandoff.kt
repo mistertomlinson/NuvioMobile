@@ -26,7 +26,18 @@ internal object DisabledRewatchCommittedSaveSink : RewatchCommittedSaveSink {
 
 /** Deliberately dormant until iPad, Android and VPS end-to-end validation. */
 internal object RewatchIpadCommitHandoff {
-    val sink: RewatchCommittedSaveSink = DisabledRewatchCommittedSaveSink
+    private var installed: RewatchCommittedSaveSink? = null
+    val sink: RewatchCommittedSaveSink
+        get() = if (RewatchMobileSyncGate.ENABLED)
+            installed ?: DisabledRewatchCommittedSaveSink
+        else DisabledRewatchCommittedSaveSink
+
+    /** Only an explicitly reviewed future build can install a live sink. */
+    fun installAfterValidation(candidate: RewatchCommittedSaveSink): Boolean {
+        if (!RewatchMobileSyncGate.ENABLED) return false
+        installed = candidate
+        return true
+    }
 }
 
 internal suspend fun notifyCommittedRewatchSave(

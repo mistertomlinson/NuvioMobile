@@ -183,6 +183,24 @@ internal object IosRewatchSyncRuntime {
         if (!RewatchMobileSyncGate.ENABLED) return RewatchOutboxDrainResult.UNAVAILABLE
         val identity = ensureOnlineIdentity() ?: return RewatchOutboxDrainResult.UNAVAILABLE
         if (currentIdentity() != identity) return RewatchOutboxDrainResult.PROFILE_CHANGED
-        return transport.submitPending()
+        val touched = outbox.pendingSeriesIds(
+            identity.profileId, identity.simklAccountId, identity.deviceId
+        )
+        val result = transport.submitPending()
+        if (result == RewatchOutboxDrainResult.DRAINED &&
+            currentIdentity() == identity) {
+            for (series in touched) {
+                if (currentIdentity() != identity) break
+                try {
+                    pullSeries(series)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    // An acknowledged event remains durable. A future
+                    // authenticated GET can establish its clean baseline.
+                }
+            }
+        }
+        return result
     }
 }

@@ -45,6 +45,17 @@ internal class RewatchTransportCoordinator(
             lease.credential.expiresAtEpochMs > nowEpochMs() + 60_000L
     }
 
+    /** Verified non-secret identity; never exposes the replay bearer. */
+    fun currentVerifiedIdentity(): RewatchCommitIdentity? {
+        val lease = currentLease ?: return null
+        if (!valid(lease)) return null
+        return RewatchCommitIdentity(
+            profileId = lease.profileId,
+            simklAccountId = lease.simklAccountId,
+            deviceId = lease.credential.deviceId
+        )
+    }
+
     suspend fun ensureConnected(): ReplayBootstrapOutcome = mutex.withLock {
         val previous = currentLease
         if (previous != null && valid(previous)) {

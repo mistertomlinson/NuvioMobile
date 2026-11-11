@@ -179,4 +179,81 @@ class RewatchTransportCoordinatorTest {
         assertEquals(ReplayBootstrapOutcome.CONNECTED, coordinator.ensureConnected())
         assertEquals(2, bootstraps)
     }
+
+    @Test
+    fun verifiedEmptyRemoteSlotCanBeUsedOnlyAfterSuccessfulAuthenticatedRead() = runBlocking {
+        val api = RewatchVpsApi(RewatchHttpExchange { _, url, _, _ ->
+            if (url.endsWith("/v1/simkl/bootstrap")) {
+                RewatchHttpResponse(201, """
+                    {"schemaVersion":1,"simklAccountId":"12003",
+                     "token":"${"b".repeat(64)}","deviceId":"$deviceId",
+                     "expiresAtEpochMs":1000000}
+                """.trimIndent())
+            } else {
+                RewatchHttpResponse(200, """{"schemaVersion":1,"items":[]}""")
+            }
+        })
+        val coordinator = RewatchTransportCoordinator(
+            currentAuthorization = { login },
+            installationIdForProfile = { installationId },
+            clientId = "existing-nuvio-app",
+            api = api,
+            outbox = RewatchSyncOutbox(MemoryOutboxStorage()) { _, _, _ -> true },
+            nowEpochMs = { 1000L }
+        )
+        val verified = coordinator.fetchCheckpointForSeries("imdb:tt0386676")
+        assertTrue(verified is RewatchRemoteLookup.Verified)
+        assertEquals(RewatchRemoteCheckpoint.ConfirmedEmpty,
+            (verified as RewatchRemoteLookup.Verified).checkpoint)
+    }
+
+    @Test
+    fun profileSwitchWhileVpsGetIsInFlightDiscardsPreviousAccountsReplayJson() = runBlocking {
+        var current = login
+        val api = RewatchVpsApi(RewatchHttpExchange { _, url, _, _ ->
+            if (url.endsWith("/v1/simkl/bootstrap")) {
+                RewatchHttpResponse(201, """
+                    {"schemaVersion":1,"simklAccountId":"12003",
+                     "token":"${"b".repeat(64)}","deviceId":"$deviceId",
+                     "expiresAtEpochMs":1000000}
+                """.trimIndent())
+            } else {
+                current = login.copy(profileId = 3, accountId = 99221L)
+                RewatchHttpResponse(200, """{"schemaVersion":1,"items":[]}""")
+            }
+        })
+        val coordinator = RewatchTransportCoordinator(
+            currentAuthorization = { current },
+            installationIdForProfile = { installationId },
+            clientId = "existing-nuvio-app",
+            api = api,
+            outbox = RewatchSyncOutbox(MemoryOutboxStorage()) { _, _, _ -> true },
+            nowEpochMs = { 1000L }
+        )
+        assertEquals(RewatchRemoteLookup.Invalid,
+            coordinator.fetchCheckpointForSeries("imdb:tt0386676"))
+    }
+
+    @Test
+    fun unavailableVpsNeverFabricatesAnEmptyRemoteCheckpoint() = runBlocking {
+        val api = RewatchVpsApi(RewatchHttpExchange { _, url, _, _ ->
+            if (url.endsWith("/v1/simkl/bootstrap")) {
+                RewatchHttpResponse(201, """
+                    {"schemaVersion":1,"simklAccountId":"12003",
+                     "token":"${"b".repeat(64)}","deviceId":"$deviceId",
+                     "expiresAtEpochMs":1000000}
+                """.trimIndent())
+            } else RewatchHttpResponse(503, "")
+        })
+        val coordinator = RewatchTransportCoordinator(
+            currentAuthorization = { login },
+            installationIdForProfile = { installationId },
+            clientId = "existing-nuvio-app",
+            api = api,
+            outbox = RewatchSyncOutbox(MemoryOutboxStorage()) { _, _, _ -> true },
+            nowEpochMs = { 1000L }
+        )
+        assertEquals(RewatchRemoteLookup.Invalid,
+            coordinator.fetchCheckpointForSeries("imdb:tt0386676"))
+    }
 }

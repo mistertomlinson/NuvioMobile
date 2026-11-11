@@ -131,4 +131,17 @@ class RewatchOfflineRevisionParityTest {
             )
         ))
     }
+    @Test fun pendingSeriesRosterIsStableAcrossRestart() = runBlocking {
+        val store = Memory()
+        val q = queue(store)
+        assertTrue(q.enqueueCommittedTransition(
+            2, account, device, null, initial,
+            RewatchRemoteCheckpoint.ConfirmedEmpty, "episode-import"
+        ))
+        assertEquals(
+            setOf("imdb:tt0386676"),
+            queue(store).pendingSeriesIds(2, account, device)
+        )
+    }
+
 }

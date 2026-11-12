@@ -148,6 +148,20 @@ internal class RewatchTransportCoordinator(
     }
 
     /**
+     * Discover a replay started on another linked device, even if this app
+     * has never stored that series locally. A 401, 503, profile switch,
+     * ambiguous item or malformed response is NOT an empty roster.
+     */
+    suspend fun fetchVerifiedRemoteSeriesIds(): List<String>? {
+        val result = fetchRemote() as? RewatchVpsReadResult.Received ?: return null
+        val identity = currentVerifiedIdentity() ?: return null
+        return readVerifiedRewatchSeriesIds(
+            payload = result.json,
+            currentOwnerKey = "local-profile:${identity.profileId}"
+        )
+    }
+
+    /**
      * Use ONLY authenticated, post-request-profile-checked VPS JSON to decide
      * whether a particular series has an empty remote slot or known revision.
      * A failure returns Invalid; it must not prompt an initial IMPORT.

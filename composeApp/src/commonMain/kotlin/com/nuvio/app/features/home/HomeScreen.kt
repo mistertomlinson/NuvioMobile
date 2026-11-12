@@ -99,6 +99,8 @@ import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.home.components.HomeCollectionRowSection
 import com.nuvio.app.features.rewatch.RewatchPhase
 import com.nuvio.app.features.rewatch.RewatchSessionRepository
+import com.nuvio.app.features.rewatch.RewatchMobileSyncGate
+import com.nuvio.app.features.rewatch.RewatchPlatformSyncLifecycle
 import com.nuvio.app.features.rewatch.resolvePendingRewatchSuccessor
 import com.nuvio.app.features.player.verifiedPlayerRewatchCompletionCatalog
 import kotlinx.coroutines.async
@@ -340,6 +342,11 @@ fun HomeScreen(
             throw cancelled
         } catch (error: Exception) {
             println("Home rewatch: unable to read isolated profile state: ${error.message}")
+        }
+        if (RewatchMobileSyncGate.ENABLED) {
+            // Runs separately from Home metadata, skeletons and CW rendering.
+            // Never hold up the first frame for optional replay transport.
+            launch { RewatchPlatformSyncLifecycle.homeForeground() }
         }
     }
 

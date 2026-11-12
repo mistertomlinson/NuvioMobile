@@ -117,4 +117,23 @@ class RewatchRemoteCheckpointReaderTest {
         assertIs<RewatchRemoteLookup.Invalid>(
             readVerifiedRewatchCheckpoint(invalid, series, owner))
     }
+
+    @Test
+    fun authenticatedServerRosterDiscoversRemoteOnlyReplayFailClosed() {
+        assertEquals(listOf(series), readVerifiedRewatchSeriesIds(nextUp, owner))
+        assertEquals(emptyList<String>(), readVerifiedRewatchSeriesIds(
+            """{"schemaVersion":1,"items":[]}""", owner
+        ))
+        val item = nextUp.substringAfter("[").substringBeforeLast("]")
+        for (bad in listOf(
+            "not-json",
+            """{"schemaVersion":2,"items":[]}""",
+            """{"schemaVersion":1,"items":[$item,$item]}""",
+            nextUp.replace("\"NEXT_UP\"", "\"UNKNOWN\""),
+            nextUp.replace("\"episode\":17", "\"episode\":18")
+        )) {
+            assertEquals(null, readVerifiedRewatchSeriesIds(bad, owner))
+        }
+        assertEquals(null, readVerifiedRewatchSeriesIds(nextUp, "local-profile:0"))
+    }
 }

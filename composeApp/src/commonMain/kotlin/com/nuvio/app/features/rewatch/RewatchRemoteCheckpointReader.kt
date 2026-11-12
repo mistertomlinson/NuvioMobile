@@ -84,27 +84,47 @@ private fun validRemote(item: VpsRewatchItem): Boolean {
     }
 }
 
+/**
+ * Parse the authenticated account-scoped server roster fail-closed.
+ * A malformed or ambiguous row must never be interpreted as "no replay".
+ * This shared parser is used for BOTH known-series checkpoint reads and
+ * discovering a replay created on another device.
+ */
+private fun verifiedRewatchList(
+    payload: String,
+    currentOwnerKey: String
+): VpsRewatchList? {
+    if (!Regex("local-profile:[1-9][0-9]*").matches(currentOwnerKey) ||
+        payload.length > 64 * 1024) return null
+    val parsed = runCatching {
+        Json { ignoreUnknownKeys = false }
+            .decodeFromString<VpsRewatchList>(payload)
+    }.getOrNull() ?: return null
+    if (parsed.schemaVersion != 1 || parsed.items.size > 1000 ||
+        !parsed.items.all(::validRemote)) return null
+    val keys = parsed.items.map { it.session.canonicalSeriesId.trim().lowercase() }
+    if (keys.distinct().size != keys.size) return null
+    return parsed
+}
+
+/** A valid empty list is distinct from a failed or unauthenticated read. */
+internal fun readVerifiedRewatchSeriesIds(
+    payload: String,
+    currentOwnerKey: String
+): List<String>? = verifiedRewatchList(payload, currentOwnerKey)
+    ?.items?.map { it.session.canonicalSeriesId }
+
 internal fun readVerifiedRewatchCheckpoint(
     payload: String,
     expectedCanonicalSeriesId: String,
     currentOwnerKey: String
 ): RewatchRemoteLookup {
     if (expectedCanonicalSeriesId.isBlank() ||
-        expectedCanonicalSeriesId.length > 160 ||
-        !Regex("local-profile:[1-9][0-9]*").matches(currentOwnerKey) ||
-        payload.length > 64 * 1024) return RewatchRemoteLookup.Invalid
-    val parsed = runCatching {
-        Json { ignoreUnknownKeys = false }
-            .decodeFromString<VpsRewatchList>(payload)
-    }.getOrNull() ?: return RewatchRemoteLookup.Invalid
-    if (parsed.schemaVersion != 1 || parsed.items.size > 1000 ||
-        !parsed.items.all(::validRemote)) return RewatchRemoteLookup.Invalid
+        expectedCanonicalSeriesId.length > 160) return RewatchRemoteLookup.Invalid
+    val parsed = verifiedRewatchList(payload, currentOwnerKey)
+        ?: return RewatchRemoteLookup.Invalid
 
     fun key(value: String) = value.trim().lowercase()
-    // Duplicate server rows, even unrelated ones, indicate corrupted state.
-    val keys = parsed.items.map { key(it.session.canonicalSeriesId) }
-    if (keys.distinct().size != keys.size) return RewatchRemoteLookup.Invalid
-
     val selected = parsed.items.firstOrNull {
         key(it.session.canonicalSeriesId) == key(expectedCanonicalSeriesId)
     } ?: return RewatchRemoteLookup.Verified(

@@ -5,6 +5,8 @@ import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.rewatch.RewatchEpisode
 import com.nuvio.app.features.rewatch.RewatchSession
 import com.nuvio.app.features.rewatch.RewatchIpadCommitHandoff
+import com.nuvio.app.features.rewatch.RewatchMobileSyncGate
+import com.nuvio.app.features.rewatch.RewatchPlatformSyncLifecycle
 import com.nuvio.app.features.rewatch.notifyCommittedRewatchSave
 import com.nuvio.app.features.rewatch.RewatchSaveCoordinator
 import com.nuvio.app.features.rewatch.RewatchSessionRepository
@@ -57,6 +59,9 @@ internal suspend fun PlayerScreenRuntime.classifyRewatchBeforeTracking() {
     // Earlier replay writes, including an EOF flush before autoplay, must
     // commit before the next episode tries to read its durable cursor.
     RewatchSaveCoordinator.awaitPending()
+    if (RewatchMobileSyncGate.ENABLED && series.isNotBlank()) {
+        RewatchPlatformSyncLifecycle.beforePlayback(series)
+    }
     if (key != activePlaybackKey ||
         selectedProfile != profileId ||
         selectedProfile != ProfileRepository.activeProfileId

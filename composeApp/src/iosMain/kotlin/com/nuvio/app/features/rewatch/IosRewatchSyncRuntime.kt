@@ -3,6 +3,10 @@ package com.nuvio.app.features.rewatch
 import com.nuvio.app.features.simkl.SimklConfig
 import com.nuvio.app.features.simkl.SimklPlatformClock
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import platform.Foundation.NSUUID
@@ -16,6 +20,9 @@ import platform.Foundation.NSUUID
  */
 internal object IosRewatchSyncRuntime {
     private val mutex = Mutex()
+    private val foregroundMutex = Mutex()
+    private val uploadMutex = Mutex()
+    private val syncScope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.Main) }
     private var boundAuth: ExistingSimklRewatchAuthorization? = null
     private var boundIdentity: RewatchCommitIdentity? = null
     private val knownCheckpoints = mutableMapOf<String, RewatchRemoteCheckpoint>()
@@ -86,7 +93,7 @@ internal object IosRewatchSyncRuntime {
     }
 
     val committedSaveSink: RewatchCommittedSaveSink by lazy {
-        RewatchCommittedOutboxSink(
+        val durableOutboxSink = RewatchCommittedOutboxSink(
             currentIdentity = { identityForOfflineSave() },
             checkpoint = { _, series ->
                 knownCheckpoints[key(series)] ?: RewatchRemoteCheckpoint.Unknown
@@ -94,6 +101,28 @@ internal object IosRewatchSyncRuntime {
             outbox = outbox,
             eventId = { NSUUID().UUIDString }
         )
+        RewatchCommittedSaveSink { profileId, before, after ->
+            durableOutboxSink.committed(profileId, before, after)
+            if (RewatchMobileSyncGate.ENABLED &&
+                after.ownerKey == "local-profile:$profileId") {
+                // Never make an outgoing request in a playback EOF/local-save
+                // callback. The outbox is persisted first; network work is
+                // a separate, cancellable process-lifetime coroutine.
+                syncScope.launch {
+                    try {
+                        val drain = uploadPending()
+                        if (drain == RewatchOutboxDrainResult.EMPTY ||
+                            drain == RewatchOutboxDrainResult.DRAINED) {
+                            reconcileForeground(after.canonicalSeriesId)
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        // Preserve offline state; never write Simkl history.
+                    }
+                }
+            }
+        }
     }
 
     /** Returns false until end-to-end tests authorize an explicit rollout. */
@@ -181,10 +210,10 @@ internal object IosRewatchSyncRuntime {
         }
     }
 
-    suspend fun uploadPending(): RewatchOutboxDrainResult {
-        if (!RewatchMobileSyncGate.ENABLED) return RewatchOutboxDrainResult.UNAVAILABLE
-        val identity = ensureOnlineIdentity() ?: return RewatchOutboxDrainResult.UNAVAILABLE
-        if (currentIdentity() != identity) return RewatchOutboxDrainResult.PROFILE_CHANGED
+    suspend fun uploadPending(): RewatchOutboxDrainResult = uploadMutex.withLock {
+        if (!RewatchMobileSyncGate.ENABLED) return@withLock RewatchOutboxDrainResult.UNAVAILABLE
+        val identity = ensureOnlineIdentity() ?: return@withLock RewatchOutboxDrainResult.UNAVAILABLE
+        if (currentIdentity() != identity) return@withLock RewatchOutboxDrainResult.PROFILE_CHANGED
         val touched = outbox.pendingSeriesIds(
             identity.profileId, identity.simklAccountId, identity.deviceId
         )
@@ -203,6 +232,62 @@ internal object IosRewatchSyncRuntime {
                 }
             }
         }
-        return result
+        return@withLock result
     }
+    private val foregroundSynchronizer by lazy {
+        RewatchForegroundSynchronizer(object : RewatchForegroundAccess {
+            override suspend fun connect(): RewatchCommitIdentity? = ensureOnlineIdentity()
+
+            override fun stillCurrent(identity: RewatchCommitIdentity): Boolean =
+                currentIdentity() == identity
+
+            override suspend fun remoteSeriesIds(): List<String>? =
+                transport.fetchVerifiedRemoteSeriesIds()
+
+            override suspend fun observeLocal(profileId: Int): RewatchObservedLocalSync =
+                RewatchSessionRepository.observeSync(profileId)
+
+            override suspend fun applyRemote(seriesId: String): Boolean =
+                pullSeries(seriesId)
+
+            override suspend fun checkpoint(seriesId: String): RewatchRemoteLookup {
+                val identity = currentIdentity() ?: return RewatchRemoteLookup.Invalid
+                val proof = transport.fetchCheckpointForSeries(seriesId)
+                if (currentIdentity() == identity && proof is RewatchRemoteLookup.Verified) {
+                    knownCheckpoints[key(seriesId)] = proof.checkpoint
+                }
+                return if (currentIdentity() == identity) proof else RewatchRemoteLookup.Invalid
+            }
+
+            override suspend fun hasPending(
+                identity: RewatchCommitIdentity, seriesId: String
+            ): Boolean = outbox.hasPendingForSeries(
+                identity.profileId, identity.simklAccountId, identity.deviceId, seriesId
+            )
+
+            override suspend fun enqueueImport(
+                identity: RewatchCommitIdentity, session: RewatchSession
+            ): Boolean {
+                if (currentIdentity() != identity) return false
+                return outbox.enqueueCommittedTransition(
+                    profileId = identity.profileId,
+                    simklAccountId = identity.simklAccountId,
+                    deviceId = identity.deviceId,
+                    before = null, after = session,
+                    checkpoint = RewatchRemoteCheckpoint.ConfirmedEmpty,
+                    eventId = NSUUID().UUIDString
+                )
+            }
+            override suspend fun upload(): RewatchOutboxDrainResult = uploadPending()
+        })
+    }
+
+    /** Explicit foreground or pre-play hook only; no default background polling. */
+    suspend fun reconcileForeground(onlySeries: String? = null): RewatchForegroundResult {
+        if (!RewatchMobileSyncGate.ENABLED) return RewatchForegroundResult.UNAVAILABLE
+        return foregroundMutex.withLock {
+            foregroundSynchronizer.reconcile(onlySeries)
+        }
+    }
+
 }

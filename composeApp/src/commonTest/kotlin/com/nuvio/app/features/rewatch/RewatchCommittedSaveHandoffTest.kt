@@ -29,7 +29,9 @@ class RewatchCommittedSaveHandoffTest {
         val progressed = replay.copy(positionMs = 5000, updatedAtEpochMs = 200)
         notifyCommittedRewatchSave(sink, false, 2, { 2 }, null, replay)
         notifyCommittedRewatchSave(sink, true, 2, { 2 }, replay, progressed)
-        assertEquals(listOf(replay to progressed), calls)
+        assertEquals(1, calls.size)
+        assertEquals(replay, calls.single().first)
+        assertEquals(progressed, calls.single().second)
     }
 
     @Test fun accountProfileChangeBlocksStaleCommittedReplay() = runBlocking {

@@ -1,5 +1,8 @@
 package com.nuvio.app.features.player
 
+import com.nuvio.app.features.rewatch.RewatchManualEpisodeSelection
+import com.nuvio.app.features.watchprogress.WatchProgressClock
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -750,10 +753,26 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
             selectDownloadedEpisodeForPlayback(
                 parentMetaId = parentMetaId,
                 episode = episode,
-                onDownloadedEpisodeSelected = { item, video -> switchToDownloadedEpisode(item, video) },
+                onDownloadedEpisodeSelected = { item, video ->
+                    if (isIos && video.season > 0 && video.episode > 0) {
+                        RewatchManualEpisodeSelection.arm(
+                            profileId, parentMetaId,
+                            playerRewatchEpisode(video.season, video.episode)!!,
+                            WatchProgressClock.nowEpochMs()
+                        )
+                    }
+                    switchToDownloadedEpisode(item, video)
+                },
             )
         },
         onEpisodeStreamsRequested = { episode ->
+            if (isIos && episode.season > 0 && episode.episode > 0) {
+                RewatchManualEpisodeSelection.arm(
+                    profileId, parentMetaId,
+                    playerRewatchEpisode(episode.season, episode.episode)!!,
+                    WatchProgressClock.nowEpochMs()
+                )
+            }
             PlayerStreamsRepository.loadEpisodeStreams(
                 type = contentType ?: parentMetaType,
                 videoId = episode.id,

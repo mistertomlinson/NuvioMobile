@@ -754,10 +754,11 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
                 parentMetaId = parentMetaId,
                 episode = episode,
                 onDownloadedEpisodeSelected = { item, video ->
-                    if (isIos && video.season > 0 && video.episode > 0) {
+                    val selectedReplayEpisode =
+                        playerRewatchEpisode(video.season, video.episode)
+                    if (isIos && selectedReplayEpisode != null) {
                         RewatchManualEpisodeSelection.arm(
-                            profileId, parentMetaId,
-                            playerRewatchEpisode(video.season, video.episode)!!,
+                            profileId, parentMetaId, selectedReplayEpisode,
                             WatchProgressClock.nowEpochMs()
                         )
                     }
@@ -766,10 +767,11 @@ private fun PlayerScreenRuntime.RenderPlayerModals(displayedPositionMs: Long) {
             )
         },
         onEpisodeStreamsRequested = { episode ->
-            if (isIos && episode.season > 0 && episode.episode > 0) {
+            val selectedReplayEpisode =
+                playerRewatchEpisode(episode.season, episode.episode)
+            if (isIos && selectedReplayEpisode != null) {
                 RewatchManualEpisodeSelection.arm(
-                    profileId, parentMetaId,
-                    playerRewatchEpisode(episode.season, episode.episode)!!,
+                    profileId, parentMetaId, selectedReplayEpisode,
                     WatchProgressClock.nowEpochMs()
                 )
             }

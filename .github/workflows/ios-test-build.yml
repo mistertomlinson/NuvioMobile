@@ -89,6 +89,42 @@ jobs:
           fi
           test -f local.properties
 
+      - name: Use dedicated iPad Simkl V1 OAuth registration
+        if: github.ref == 'refs/heads/test/rewatch-public-https-20261112'
+        shell: bash
+        env:
+          NUVIO_SIMKL_IPAD_V1_CLIENT_ID: ${{ secrets.NUVIO_SIMKL_IPAD_V1_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          client_id = os.environ.get("NUVIO_SIMKL_IPAD_V1_CLIENT_ID", "").strip()
+          if not client_id or any(char in client_id for char in "\\r\\n="):
+              raise SystemExit(
+                  "::error::Missing or invalid NUVIO_SIMKL_IPAD_V1_CLIENT_ID Actions secret. "
+                  "Do not build an IPA with the other Nuvio/TV Simkl registration."
+              )
+
+          path = Path("local.properties")
+          if not path.is_file():
+              raise SystemExit("::error::Missing base local.properties build configuration.")
+
+          keep = [
+              line
+              for line in path.read_text().splitlines()
+              if line.partition("=")[0].strip()
+              not in ("SIMKL_CLIENT_ID", "SIMKL_REDIRECT_URI")
+          ]
+          keep.extend((
+              "SIMKL_CLIENT_ID=" + client_id,
+              "SIMKL_REDIRECT_URI=nuvio://auth/simkl",
+          ))
+          path.write_text("\\n".join(keep) + "\\n")
+          print("Dedicated iPad Simkl V1 client and nuvio callback injected (client ID hidden).")
+          PY
+
       - name: Prepare iOS dependencies
         run: ./scripts/prepare-ios-dependencies.sh
 

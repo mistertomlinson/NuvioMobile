@@ -101,6 +101,23 @@ test('manual reposition follows authenticated active replay across devices', () 
   assert.equal((await list(request, tokens.tv)).body.items[0].session.episode.episode, 19);
 }));
 
+test('details Resume manual jump retains position and is visible on the other device', () =>
+  fixture(async ({ request }) => {
+    await post(request, tokens.ipad, event('START', 0, { session: initial }));
+    const moved = await post(request, tokens.ipad, event('REPOSITION', 1, {
+      eventId: 'resume-episode-19', episode: { season: 5, episode: 19 },
+      positionMs: 391000, durationMs: 0
+    }));
+    assert.equal(moved.status, 200);
+    assert.equal(moved.body.session.positionMs, 391000);
+    assert.equal((await list(request, tokens.tv)).body.items[0].session.positionMs, 391000);
+    assert.equal((await post(request, tokens.ipad, event('REPOSITION', 2, {
+      eventId: 'bad-resume', episode: { season: 5, episode: 20 },
+      positionMs: -1, durationMs: 0
+    }))).status, 409);
+  })
+);
+
 test('backward manual reposition is allowed but stale events and malformed requests fail closed',
   () => fixture(async ({ request }) => {
     await post(request, tokens.ipad, event('START', 0, { session: initial }));

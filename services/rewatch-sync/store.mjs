@@ -163,15 +163,20 @@ export class RewatchStore {
           // expectedRevision were checked above. No Simkl history is touched.
           if (!['PLAYING', 'NEXT_UP', 'AWAITING_METADATA'].includes(session.phase) ||
               !episode(event.episode) || equalEpisode(session.episode, event.episode) ||
-              event.positionMs != null || event.durationMs != null ||
+              (event.positionMs != null && !nonnegative(event.positionMs)) ||
+              (event.durationMs != null && !nonnegative(event.durationMs)) ||
+              (event.durationMs > 0 && event.positionMs >= event.durationMs) ||
               event.nextEpisode != null || event.completedEpisode != null ||
               event.session != null) return fail(409, 'invalid_reposition');
           session = {
             ...session,
-            episode: { ...event.episode },
+            episode: { season: event.episode.season, episode: event.episode.episode },
             phase: 'PLAYING',
-            positionMs: 0,
-            durationMs: 0,
+            // Preserve an explicit "Resume S5E19" position from the details
+            // action. Unknown duration is represented by zero and will be
+            // replaced by the next genuine player progress save.
+            positionMs: event.positionMs ?? 0,
+            durationMs: event.durationMs ?? 0,
             lastCompletedEpisode: null
           };
         } else if (event.type === 'COMPLETE_EPISODE') {

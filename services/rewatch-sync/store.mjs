@@ -7,7 +7,7 @@ const nonnegative = x => Number.isSafeInteger(x) && x >= 0;
 const positive = x => Number.isSafeInteger(x) && x > 0;
 const episode = x => x && positive(x.season) && positive(x.episode);
 const phases = new Set(['PLAYING', 'NEXT_UP', 'AWAITING_METADATA', 'FINISHED']);
-const VALID_EVENTS = new Set(['START', 'PROGRESS', 'COMPLETE_EPISODE', 'RESOLVE_METADATA', 'IMPORT_SNAPSHOT', 'STOP']);
+const VALID_EVENTS = new Set(['START', 'PROGRESS', 'COMPLETE_EPISODE', 'RESOLVE_METADATA', 'IMPORT_SNAPSHOT', 'STOP', 'REPOSITION']);
 const safeKey = (principal, series) => JSON.stringify([principal, series]);
 const hashBody = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = (status, error) => ({ status, body: { error } });
@@ -157,6 +157,23 @@ export class RewatchStore {
               !nonnegative(event.positionMs) || !nonnegative(event.durationMs)) return fail(409, 'invalid_progress');
           if (session.phase === 'NEXT_UP' && event.positionMs < 1000) return fail(409, 'next_up_not_started');
           session = { ...session, phase: 'PLAYING', positionMs: event.positionMs, durationMs: event.durationMs };
+        } else if (event.type === 'REPOSITION') {
+          // A manual episode-list selection, not an autoplay completion.
+          // The authenticated account, exact replay session ID, and optimistic
+          // expectedRevision were checked above. No Simkl history is touched.
+          if (!['PLAYING', 'NEXT_UP', 'AWAITING_METADATA'].includes(session.phase) ||
+              !episode(event.episode) || equalEpisode(session.episode, event.episode) ||
+              event.positionMs != null || event.durationMs != null ||
+              event.nextEpisode != null || event.completedEpisode != null ||
+              event.session != null) return fail(409, 'invalid_reposition');
+          session = {
+            ...session,
+            episode: { ...event.episode },
+            phase: 'PLAYING',
+            positionMs: 0,
+            durationMs: 0,
+            lastCompletedEpisode: null
+          };
         } else if (event.type === 'COMPLETE_EPISODE') {
           if (session.phase !== 'PLAYING' || !equalEpisode(event.episode, session.episode) ||
               !['NEXT_UP', 'AWAITING_METADATA', 'FINISHED'].includes(event.resultPhase)) {

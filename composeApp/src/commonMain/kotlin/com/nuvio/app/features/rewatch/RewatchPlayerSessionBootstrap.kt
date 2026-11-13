@@ -18,6 +18,7 @@ internal suspend fun resolveOrStartRewatchForPlayback(
     wasPreviouslyWatched: suspend () -> Boolean,
     createSessionId: () -> String,
     nowEpochMs: () -> Long,
+    explicitManualEpisodeSelection: Boolean = false,
     onCommitted: suspend (RewatchSession?, RewatchSession) -> Unit = { _, _ -> }
 ): RewatchSession? {
     require(expectedProfileId > 0)
@@ -36,10 +37,35 @@ internal suspend fun resolveOrStartRewatchForPlayback(
             )
     }
 
-    // Never replace a running replay merely because someone selected another
-    // previously watched episode.
+    // A changed playback key is not enough to move a running replay:
+    // autoplay, player restores and ordinary first watches also change keys.
+    // Only a one-shot explicit episode-list click may request reposition.
     if (recorded != null && recorded.phase != RewatchPhase.FINISHED) {
-        return recorded.takeIf { it.episode == episode }
+        if (recorded.episode == episode) return recorded
+        if (!explicitManualEpisodeSelection) return null
+        if (!wasPreviouslyWatched()) return null
+        if (activeProfileId() != expectedProfileId) return null
+        val now = nowEpochMs()
+        if (now <= recorded.updatedAtEpochMs) return null
+        val moved = recorded.copy(
+            episode = episode,
+            phase = RewatchPhase.PLAYING,
+            positionMs = 0L,
+            durationMs = 0L,
+            lastCompletedEpisode = null,
+            updatedAtEpochMs = now
+        )
+        if (activeProfileId() != expectedProfileId) return null
+        if (!store.upsert(expectedProfileId, moved)) return null
+        if (activeProfileId() != expectedProfileId) return null
+        try {
+            onCommitted(recorded, moved)
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // Preserve an already-durable move if optional upload is offline.
+        }
+        return moved
     }
 
     // Unknown or not-yet-loaded provider history is not affirmative evidence

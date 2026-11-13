@@ -1,0 +1,120 @@
+name: Build isolated public-HTTPS rewatch iPad IPA
+
+on:
+  push:
+    branches:
+      - test/rewatch-public-https-20261112
+    paths:
+      - .github/workflows/rewatch-public-ipa.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rewatch-public-ipa-test
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: iOS full unsigned device-test IPA
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+      GRADLE_OPTS: -Dfile.encoding=UTF-8
+      IOS_CONFIGURATION: Release
+      KOTLIN_DAEMON_JVMARGS: -Xmx2048M
+      NUVIO_GRADLE_JVMARGS: -Xmx4608M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=768M
+      NUVIO_KOTLIN_NATIVE_JVMARGS: -Xmx4608M
+      RELEASE_PROPERTIES_BASE64: ${{ secrets.NUVIO_LOCAL_PROPERTIES_BASE64 }}
+
+    steps:
+      - name: Check out exact isolated test source
+        uses: actions/checkout@v6
+      - name: Require the isolated public HTTPS test branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/test/rewatch-public-https-20261112"
+          grep -q 'const val ENABLED = true' composeApp/src/commonMain/kotlin/com/nuvio/app/features/rewatch/RewatchCommittedSaveHandoff.kt
+          grep -q 'isolatedIpadDeviceTestEnablesReplayOnlySyncButDoesNotAutoInstallSink' composeApp/src/commonTest/kotlin/com/nuvio/app/features/rewatch/RewatchCommittedSaveHandoffTest.kt
+          echo 'IPAD_SYNC_GATE=ON_TEST_BRANCH_ONLY'
+          echo "SOURCE_SHA=$(git rev-parse HEAD)"
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@v6
+      - name: Cache Kotlin Native
+        uses: actions/cache@v5
+        with:
+          path: ~/.konan
+          key: rewatch-ios-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: |
+            rewatch-ios-${{ runner.os }}-${{ runner.arch }}-
+            konan-${{ runner.os }}-${{ runner.arch }}-
+      - name: Verify Apple toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Load private existing Nuvio runtime configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_PROPERTIES_BASE64:-}" ]]; then
+            echo '::error::NUVIO_LOCAL_PROPERTIES_BASE64 secret is missing; cannot build a usable iPad IPA.'
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$RELEASE_PROPERTIES_BASE64" | base64 --decode > local.properties
+          sed -i '' -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          data = {}
+          for line in Path('local.properties').read_text().splitlines():
+              key, sep, val = line.partition('=')
+              if sep:
+                  data[key.strip()] = val.strip()
+          keys = ('NUVIO_SUPABASE_URL', 'NUVIO_SUPABASE_ANON_KEY',
+                  'TMDB_API_KEY', 'SIMKL_CLIENT_ID')
+          missing = [key for key in keys if not data.get(key)]
+          if missing:
+              raise SystemExit('::error::Missing required IPA configuration keys: ' +
+                               ', '.join(missing))
+          cid = data['SIMKL_CLIENT_ID']
+          print('RUNTIME_CONFIG=COMPLETE')
+          print('SIMKL_CLIENT_ID_FINGERPRINT=' +
+                hashlib.sha256(cid.encode()).hexdigest()[:12])
+          PY
+      - name: Prepare upstream iOS dependencies
+        run: ./scripts/prepare-ios-dependencies.sh
+      - name: Build unsigned full release IPA for device signing
+        run: ./scripts/build-ios-ipa.sh
+      - name: Summarize output without secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          ipa="$(find build/ios-ipa -maxdepth 1 -name '*-full-release.ipa' -type f -print -quit)"
+          test -n "$ipa"
+          {
+            echo '## Rewatch public HTTPS test IPA'
+            echo
+            echo "- Source: $(git rev-parse HEAD)"
+            echo "- Filename: $(basename "$ipa")"
+            echo "- SHA256: $(shasum -a 256 "$ipa" | awk '{print $1}')"
+            echo "- Configuration: full Release"
+            echo "- Signing: unsigned; requires normal iPad sideload signer"
+            echo "- Rewatch-only sync enabled in isolated test branch"
+            echo "- Normal development branches and installed apps untouched"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload unsigned full test IPA
+        uses: actions/upload-artifact@v7
+        with:
+          name: rewatch-public-https-ipa-${{ github.sha }}
+          path: build/ios-ipa/*-full-release.ipa
+          if-no-files-found: error
+          retention-days: 7

@@ -19,6 +19,7 @@ internal suspend fun resolveOrStartRewatchForPlayback(
     createSessionId: () -> String,
     nowEpochMs: () -> Long,
     explicitManualEpisodeSelection: Boolean = false,
+    manualResumePositionMs: Long? = null,
     onCommitted: suspend (RewatchSession?, RewatchSession) -> Unit = { _, _ -> }
 ): RewatchSession? {
     require(expectedProfileId > 0)
@@ -50,7 +51,7 @@ internal suspend fun resolveOrStartRewatchForPlayback(
         val moved = recorded.copy(
             episode = episode,
             phase = RewatchPhase.PLAYING,
-            positionMs = 0L,
+            positionMs = manualResumePositionMs?.takeIf { it > 0L } ?: 0L,
             durationMs = 0L,
             lastCompletedEpisode = null,
             updatedAtEpochMs = now

@@ -94,6 +94,44 @@ class RewatchCommittedEventPlannerTest {
     }
 
     @Test
+    fun manualForwardAndBackwardSelectionPreservesSessionAndProducesReposition() {
+        for (target in listOf(RewatchEpisode(5, 18), RewatchEpisode(2, 1))) {
+            val moved = original.copy(
+                episode = target, positionMs = 0L, durationMs = 0L,
+                lastCompletedEpisode = null, phase = RewatchPhase.PLAYING,
+                updatedAtEpochMs = 400
+            )
+            val planned = requireNotNull(plan(original, moved,
+                RewatchRemoteCheckpoint.Synced(11, original.sessionId)))
+            val body = data(planned)
+            assertEquals("REPOSITION", body["type"]?.jsonPrimitive?.content)
+            assertEquals("11", body["expectedRevision"]?.toString())
+            assertEquals(target.season.toString(),
+                body["episode"]?.jsonObject?.get("season")?.toString())
+            assertEquals(original.sessionId, planned.sessionId)
+            assertTrue("ownerKey" !in planned.payload)
+        }
+    }
+
+    @Test
+    fun autoplayCompletionAndArbitraryProgressNeverForgeReposition() {
+        val next = original.copy(
+            episode = s3e6,
+            phase = RewatchPhase.NEXT_UP,
+            lastCompletedEpisode = s3e5,
+            positionMs = 0L,
+            durationMs = 0L
+        )
+        val completion = requireNotNull(plan(original, next,
+            RewatchRemoteCheckpoint.Synced(7, original.sessionId)))
+        assertEquals("COMPLETE_EPISODE", data(completion)["type"]?.jsonPrimitive?.content)
+        assertNull(plan(original, original.copy(
+            episode = s3e6, phase = RewatchPhase.PLAYING,
+            positionMs = 3_000, lastCompletedEpisode = null
+        ), RewatchRemoteCheckpoint.Synced(7, original.sessionId)))
+    }
+
+    @Test
     fun unknownMetadataDoesNotFalselyFinishTheSeries() {
         val awaiting = original.copy(
             phase = RewatchPhase.AWAITING_METADATA,

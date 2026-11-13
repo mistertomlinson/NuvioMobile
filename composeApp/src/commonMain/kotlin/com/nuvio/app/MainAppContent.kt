@@ -110,6 +110,10 @@ import com.nuvio.app.features.home.HomeCatalogSection
 import com.nuvio.app.features.home.HomeCatalogSettingsRepository
 import com.nuvio.app.features.home.HomeRepository
 import com.nuvio.app.features.rewatch.RewatchSessionRepository
+import com.nuvio.app.features.rewatch.RewatchMobileSyncGate
+import com.nuvio.app.features.rewatch.RewatchIpadCommitHandoff
+import com.nuvio.app.features.rewatch.RewatchPhase
+import com.nuvio.app.features.rewatch.notifyCommittedRewatchSave
 import com.nuvio.app.features.home.buildAddonCatalogRefreshSignature
 import com.nuvio.app.features.home.components.shouldBlurContinueWatchingArtwork
 import com.nuvio.app.features.library.LibraryItem
@@ -1262,13 +1266,56 @@ internal fun MainAppContent(
             if (item.isRewatch) {
                 val selectedProfile = ProfileRepository.activeProfileId
                 coroutineScope.launch {
-                    val removed = runCatching {
+                    // Capture the saved replay transition before dismissal.
+                    // No extra storage read is required in ordinary builds.
+                    val original = if (RewatchMobileSyncGate.ENABLED) {
+                        try {
+                            RewatchSessionRepository.load(selectedProfile).firstOrNull {
+                                it.ownerKey == "local-profile:$selectedProfile" &&
+                                    it.canonicalSeriesId.trim().equals(
+                                        item.parentMetaId.trim(), ignoreCase = true
+                                    ) && it.phase != RewatchPhase.FINISHED
+                            }
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            null
+                        }
+                    } else null
+                    val removed = try {
                         RewatchSessionRepository.dismiss(
                             profileId = selectedProfile,
                             ownerKey = "local-profile:$selectedProfile",
                             contentId = item.parentMetaId,
                         )
-                    }.getOrDefault(false)
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        false
+                    }
+                    if (removed && RewatchMobileSyncGate.ENABLED && original != null) {
+                        val finished = try {
+                            RewatchSessionRepository.load(selectedProfile).firstOrNull {
+                                it.sessionId == original.sessionId &&
+                                    it.ownerKey == original.ownerKey &&
+                                    it.phase == RewatchPhase.FINISHED
+                            }
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            null
+                        }
+                        if (finished != null) {
+                            notifyCommittedRewatchSave(
+                                sink = RewatchIpadCommitHandoff.sink,
+                                accepted = true,
+                                profileId = selectedProfile,
+                                activeProfileId = { ProfileRepository.activeProfileId },
+                                before = original,
+                                after = finished
+                            )
+                        }
+                    }
                     if (removed && ProfileRepository.activeProfileId == selectedProfile) {
                         continueWatchingDisintegrationRequests.arm(continueWatchingItemKey(item))
                     }

@@ -57,6 +57,20 @@ internal class RewatchForegroundSynchronizer(
         val identity = access.connect() ?: return RewatchForegroundResult.UNAVAILABLE
         fun current() = access.stillCurrent(identity)
         if (!current()) return RewatchForegroundResult.PROFILE_CHANGED
+        // Drain previously persisted offline events FIRST. Otherwise a remote
+        // GET would see pending events, decline to apply the remote cursor,
+        // and leave the queue stranded after reconnect. A 409 always stops
+        // before any state merge and never drops the event.
+        when (access.upload()) {
+            RewatchOutboxDrainResult.EMPTY, RewatchOutboxDrainResult.DRAINED -> Unit
+            RewatchOutboxDrainResult.CONFLICT ->
+                return RewatchForegroundResult.LOCAL_CONFLICT
+            RewatchOutboxDrainResult.PROFILE_CHANGED ->
+                return RewatchForegroundResult.PROFILE_CHANGED
+            RewatchOutboxDrainResult.UNAUTHORIZED, RewatchOutboxDrainResult.UNAVAILABLE ->
+                return RewatchForegroundResult.UNAVAILABLE
+        }
+        if (!current()) return RewatchForegroundResult.PROFILE_CHANGED
         fun matches(series: String): Boolean = expectedSeries == null ||
             series.trim().equals(expectedSeries, ignoreCase = true)
         fun key(series: String) = series.trim().lowercase()
@@ -87,6 +101,7 @@ internal class RewatchForegroundSynchronizer(
             return RewatchForegroundResult.LOCAL_CONFLICT
         }
         val remoteKeys = remote.map(::key).toSet()
+        var imported = false
         for (local in initial.sessions.filter { matches(it.canonicalSeriesId) }
             .filter { key(it.canonicalSeriesId) !in remoteKeys }) {
             if (!current()) return RewatchForegroundResult.PROFILE_CHANGED
@@ -121,8 +136,12 @@ internal class RewatchForegroundSynchronizer(
                 return if (current()) RewatchForegroundResult.LOCAL_CONFLICT
                 else RewatchForegroundResult.PROFILE_CHANGED
             }
+            imported = true
         }
         if (!current()) return RewatchForegroundResult.PROFILE_CHANGED
+        if (!imported) return RewatchForegroundResult.COMPLETED
+        // New imports were durably enqueued; only their POST needs a second
+        // drain. No duplicate GET or history mutation is necessary.
         return when (access.upload()) {
             RewatchOutboxDrainResult.EMPTY, RewatchOutboxDrainResult.DRAINED ->
                 if (current()) RewatchForegroundResult.COMPLETED

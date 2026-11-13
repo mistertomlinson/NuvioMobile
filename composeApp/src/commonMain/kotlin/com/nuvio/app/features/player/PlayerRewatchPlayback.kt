@@ -5,6 +5,7 @@ import com.nuvio.app.features.profiles.ProfileRepository
 import com.nuvio.app.features.rewatch.RewatchEpisode
 import com.nuvio.app.features.rewatch.RewatchSession
 import com.nuvio.app.features.rewatch.RewatchIpadCommitHandoff
+import com.nuvio.app.features.rewatch.RewatchManualEpisodeSelection
 import com.nuvio.app.features.rewatch.RewatchMobileSyncGate
 import com.nuvio.app.features.rewatch.RewatchPlatformSyncLifecycle
 import com.nuvio.app.features.rewatch.notifyCommittedRewatchSave
@@ -67,6 +68,13 @@ internal suspend fun PlayerScreenRuntime.classifyRewatchBeforeTracking() {
         selectedProfile != ProfileRepository.activeProfileId
     ) return
 
+    // Consume only the explicit click matching this exact profile/show/episode.
+    // Autoplay and ordinary resume never arm this marker.
+    val explicitManualSelection = selectedEpisode != null &&
+        RewatchManualEpisodeSelection.consume(
+            selectedProfile, series, selectedEpisode, WatchProgressClock.nowEpochMs()
+        )
+
     val resolved: RewatchSession? = if (
         parentMetaType.trim().lowercase() !in
             setOf("series", "tv", "show", "tvshow") ||
@@ -110,6 +118,7 @@ internal suspend fun PlayerScreenRuntime.classifyRewatchBeforeTracking() {
                 "ios-$selectedProfile-${WatchProgressClock.nowEpochMs()}-${Random.nextLong()}"
             },
             nowEpochMs = { WatchProgressClock.nowEpochMs() },
+            explicitManualEpisodeSelection = explicitManualSelection,
             onCommitted = { before, after ->
                 notifyCommittedRewatchSave(
                     sink = RewatchIpadCommitHandoff.sink,

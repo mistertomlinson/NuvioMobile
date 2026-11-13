@@ -16,7 +16,7 @@ private val office = RewatchSession(
     updatedAtEpochMs = 100L
 )
 
-private class FakeSyncAccess : RewatchForegroundAccess {
+private inner class FakeSyncAccess : RewatchForegroundAccess {
     val who = RewatchCommitIdentity(2, "12003", "simkl-device:test")
     var current = true
     var visible: List<String>? = emptyList()

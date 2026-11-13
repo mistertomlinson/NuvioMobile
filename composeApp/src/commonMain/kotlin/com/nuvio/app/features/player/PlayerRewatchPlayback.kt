@@ -70,10 +70,11 @@ internal suspend fun PlayerScreenRuntime.classifyRewatchBeforeTracking() {
 
     // Consume only the explicit click matching this exact profile/show/episode.
     // Autoplay and ordinary resume never arm this marker.
-    val explicitManualSelection = selectedEpisode != null &&
+    val manualSelection = selectedEpisode?.let {
         RewatchManualEpisodeSelection.consume(
-            selectedProfile, series, selectedEpisode, WatchProgressClock.nowEpochMs()
+            selectedProfile, series, it, WatchProgressClock.nowEpochMs()
         )
+    }
 
     val resolved: RewatchSession? = if (
         parentMetaType.trim().lowercase() !in
@@ -118,7 +119,8 @@ internal suspend fun PlayerScreenRuntime.classifyRewatchBeforeTracking() {
                 "ios-$selectedProfile-${WatchProgressClock.nowEpochMs()}-${Random.nextLong()}"
             },
             nowEpochMs = { WatchProgressClock.nowEpochMs() },
-            explicitManualEpisodeSelection = explicitManualSelection,
+            explicitManualEpisodeSelection = manualSelection != null,
+            manualResumePositionMs = manualSelection?.resumePositionMs,
             onCommitted = { before, after ->
                 notifyCommittedRewatchSave(
                     sink = RewatchIpadCommitHandoff.sink,

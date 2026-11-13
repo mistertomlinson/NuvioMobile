@@ -101,7 +101,7 @@ jobs:
           from pathlib import Path
 
           client_id = os.environ.get("NUVIO_SIMKL_IPAD_V1_CLIENT_ID", "").strip()
-          if not client_id or any(char in client_id for char in "\\r\\n="):
+          if not client_id or any(char in client_id for char in "\r\n="):
               raise SystemExit(
                   "::error::Missing or invalid NUVIO_SIMKL_IPAD_V1_CLIENT_ID Actions secret. "
                   "Do not build an IPA with the other Nuvio/TV Simkl registration."
@@ -121,7 +121,7 @@ jobs:
               "SIMKL_CLIENT_ID=" + client_id,
               "SIMKL_REDIRECT_URI=nuvio://auth/simkl",
           ))
-          path.write_text("\\n".join(keep) + "\\n")
+          path.write_text("\n".join(keep) + "\n")
           print("Dedicated iPad Simkl V1 client and nuvio callback injected (client ID hidden).")
           PY
 

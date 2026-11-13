@@ -15,7 +15,8 @@ internal fun interface RewatchCommittedSaveSink {
 }
 
 internal object RewatchMobileSyncGate {
-    const val ENABLED = false
+    // Explicit public-HTTPS device-test branch; not a production rollout.
+    const val ENABLED = true
 }
 
 internal object DisabledRewatchCommittedSaveSink : RewatchCommittedSaveSink {

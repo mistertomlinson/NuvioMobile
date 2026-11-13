@@ -1,5 +1,8 @@
 package com.nuvio.app.features.details
 
+import com.nuvio.app.features.rewatch.RewatchEpisode
+import com.nuvio.app.features.rewatch.RewatchManualEpisodeSelection
+
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.ExperimentalSharedTransitionApi
@@ -919,6 +922,14 @@ fun MetaDetailsScreen(
                         episodeNumber = episode,
                     )
                         ?.takeUnless { it.isCompleted }
+                    if (onPlay != null && season > 0 && episode > 0) {
+                        RewatchManualEpisodeSelection.arm(
+                            ProfileRepository.activeProfileId,
+                            meta.id,
+                            RewatchEpisode(season, episode),
+                            WatchProgressClock.nowEpochMs()
+                        )
+                    }
                     onPlay?.invoke(
                         meta.type,
                         streamVideoId,
@@ -953,6 +964,14 @@ fun MetaDetailsScreen(
                         episodeNumber = episode,
                     )
                         ?.takeUnless { it.isCompleted }
+                    if (onPlayManually != null && season > 0 && episode > 0) {
+                        RewatchManualEpisodeSelection.arm(
+                            ProfileRepository.activeProfileId,
+                            meta.id,
+                            RewatchEpisode(season, episode),
+                            WatchProgressClock.nowEpochMs()
+                        )
+                    }
                     onPlayManually?.invoke(
                         meta.type,
                         streamVideoId,

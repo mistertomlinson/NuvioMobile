@@ -3,7 +3,6 @@ package com.nuvio.app.features.rewatch
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class RewatchCommittedSaveHandoffTest {
@@ -16,8 +15,10 @@ class RewatchCommittedSaveHandoffTest {
         updatedAtEpochMs = 100
     ))
 
-    @Test fun ipadRolloutGateRemainsDisabled() {
-        assertFalse(RewatchMobileSyncGate.ENABLED)
+    @Test fun isolatedIpadDeviceTestEnablesReplayOnlySyncButDoesNotAutoInstallSink() {
+        // Only this separate device-test branch has the gate enabled.
+        // Playback's remote handoff must still be installed intentionally.
+        assertTrue(RewatchMobileSyncGate.ENABLED)
         assertTrue(RewatchIpadCommitHandoff.sink === DisabledRewatchCommittedSaveSink)
     }
 

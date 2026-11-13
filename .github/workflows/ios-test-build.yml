@@ -5,6 +5,7 @@ on:
     branches:
       - feature/persistent-simkl-rewatch-0.6.7
       - test/rewatch-public-https-20261112
+      - fix/rewatch-manual-reposition-ipad-20261113
     paths:
       - 'composeApp/src/**'
       - 'composeApp/build.gradle.kts'
@@ -31,7 +32,7 @@ jobs:
   build:
     name: Build unsigned full ${{ inputs.configuration }} IPA
     runs-on: xcode-27
-    timeout-minutes: ${{ github.ref == 'refs/heads/test/rewatch-public-https-20261112' && 150 || (github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && 75 || (inputs.configuration == 'Release' && 75 || 30)) }}
+    timeout-minutes: ${{ (github.ref == 'refs/heads/test/rewatch-public-https-20261112' || github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113') && 150 || (github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && 75 || (inputs.configuration == 'Release' && 75 || 30)) }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
       GRADLE_OPTS: -Dfile.encoding=UTF-8
@@ -90,7 +91,7 @@ jobs:
           test -f local.properties
 
       - name: Use dedicated iPad Simkl V1 OAuth registration
-        if: github.ref == 'refs/heads/test/rewatch-public-https-20261112'
+        if: (github.ref == 'refs/heads/test/rewatch-public-https-20261112' || github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113')
         shell: bash
         env:
           NUVIO_SIMKL_IPAD_V1_CLIENT_ID: ${{ secrets.NUVIO_SIMKL_IPAD_V1_CLIENT_ID }}
@@ -129,7 +130,7 @@ jobs:
         run: ./scripts/prepare-ios-dependencies.sh
 
       - name: Validate rewatch-specific iOS simulator tests
-        if: github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
+        if: github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' || github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113'
         run: |
           # Prior full-suite validation compiled successfully, but three
           # untouched legacy tests failed: ChapterSkipIntervalsTest (two)
@@ -143,7 +144,7 @@ jobs:
             --console=plain
 
       - name: Summarize rewatch validation
-        if: github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
+        if: github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' || github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113'
         run: |
           {
             echo "## Focused iPad rewatch validation"
@@ -156,7 +157,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify isolated HTTPS test branch uses enabled replay gate
-        if: github.ref == 'refs/heads/test/rewatch-public-https-20261112'
+        if: (github.ref == 'refs/heads/test/rewatch-public-https-20261112' || github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113')
         shell: bash
         run: |
           set -euo pipefail

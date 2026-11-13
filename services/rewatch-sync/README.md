@@ -6,7 +6,9 @@ This service is **not connected** to Nuvio's live Android/iPad builds or to Simk
 
 Node 20+ required; no npm dependencies. Run `npm test` from this directory.
 
-The service exposes `GET /v1/rewatches`, `GET /v1/rewatches/:sessionId`, and `POST /v1/rewatches/events` for START, PROGRESS, COMPLETE_EPISODE, and STOP. Every event includes an idempotent event ID, expected server revision, session ID, canonical series ID, and token-bound device ID.
+The service exposes `GET /v1/rewatches`, `GET /v1/rewatches/:sessionId`, and `POST /v1/rewatches/events` for START, PROGRESS, COMPLETE_EPISODE, RESOLVE_METADATA, IMPORT_SNAPSHOT, REPOSITION, and STOP. Every event includes an idempotent event ID, expected server revision, session ID, canonical series ID, and token-bound device ID.
+
+`REPOSITION` is the explicitly user-selected replay episode transition: the authenticated account's existing active session ID is retained; the episode may move forward or backward; old completion markers are discarded; and an optional nonnegative resume position is retained. A stale `expectedRevision`, another device's session ID, a stopped replay, or malformed episode is rejected. This event has **no effect on Simkl watched history**. Clients must only create it after a genuine episode-list/Resume action and a positive watched-history check.
 
 Use **separate strong tokens** and explicitly bind multiple devices to the same server-side person ID. Device-local profile indexes never establish identity. The service stores replay state only, never Simkl tokens or watched history.
 

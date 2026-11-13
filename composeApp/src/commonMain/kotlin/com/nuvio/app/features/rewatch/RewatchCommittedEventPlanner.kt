@@ -134,10 +134,13 @@ internal fun planCommittedRewatchEvent(
                 ) &&
                     before.episode != after.episode &&
                     after.phase == RewatchPhase.PLAYING &&
-                    after.positionMs == 0L && after.durationMs == 0L &&
+                    // A details-page Resume may carry its previously saved
+                    // offset. Duration zero means unknown until player starts.
                     after.lastCompletedEpisode == null -> {
                     type = "REPOSITION"
                     episode = after.episode
+                    position = after.positionMs
+                    duration = after.durationMs
                 }
                 before.phase == RewatchPhase.AWAITING_METADATA &&
                     after.lastCompletedEpisode == before.lastCompletedEpisode &&

@@ -70,6 +70,63 @@ test('event retries do not advance twice; reused event IDs conflict', () => fixt
     ...start, session: { ...initial, positionMs: 3000 }
   })).status, 409);
 }));
+test('manual reposition follows authenticated active replay across devices', () => fixture(async ({ request }) => {
+  await post(request, tokens.ipad, event('START', 0, { session: initial }));
+  const jump = event('REPOSITION', 1, {
+    eventId: 'user-selected-s5e18',
+    episode: { season: 5, episode: 18 }
+  });
+  const response = await post(request, tokens.ipad, jump);
+  assert.equal(response.status, 200);
+  assert.equal(response.body.revision, 2);
+  assert.deepEqual(response.body.session.episode, { season: 5, episode: 18 });
+  assert.equal(response.body.session.phase, 'PLAYING');
+  assert.equal(response.body.session.sessionId, initial.sessionId);
+  assert.equal(response.body.session.positionMs, 0);
+  assert.equal(response.body.session.durationMs, 0);
+  assert.equal(response.body.session.lastCompletedEpisode, null);
+  assert.deepEqual(await post(request, tokens.ipad, jump), response);
+  assert.equal((await list(request, tokens.tv)).body.items[0].session.episode.episode, 18);
+  assert.equal((await list(request, tokens.other)).body.items.length, 0);
+  const progress = await post(request, tokens.ipad, event('PROGRESS', 2, {
+    episode: { season: 5, episode: 18 },
+    positionMs: 45000, durationMs: 1100000
+  }));
+  assert.equal(progress.status, 200);
+  const next = await post(request, tokens.ipad, event('COMPLETE_EPISODE', 3, {
+    episode: { season: 5, episode: 18 }, resultPhase: 'NEXT_UP',
+    nextEpisode: { season: 5, episode: 19 }
+  }));
+  assert.equal(next.status, 200);
+  assert.equal((await list(request, tokens.tv)).body.items[0].session.episode.episode, 19);
+}));
+
+test('backward manual reposition is allowed but stale events and malformed requests fail closed',
+  () => fixture(async ({ request }) => {
+    await post(request, tokens.ipad, event('START', 0, { session: initial }));
+    const back = await post(request, tokens.ipad, event('REPOSITION', 1, {
+      episode: { season: 2, episode: 4 }
+    }));
+    assert.equal(back.status, 200);
+    assert.equal(back.body.session.episode.season, 2);
+    assert.equal((await post(request, tokens.tv, event('REPOSITION', 1, {
+      eventId: 'stale-tv-jump', deviceId: 'tv-1',
+      episode: { season: 6, episode: 1 }
+    }))).status, 409);
+    for (const [suffix, fields] of [
+      ['same', { episode: { season: 2, episode: 4 } }],
+      ['nonseason', { episode: { season: 0, episode: 5 } }],
+      ['inject', { episode: { season: 2, episode: 5 }, positionMs: 6000 }],
+      ['add-session', { episode: { season: 2, episode: 5 }, session: initial }]
+    ]) {
+      assert.equal((await post(request, tokens.ipad, event('REPOSITION', 2, {
+        eventId: 'invalid-' + suffix, ...fields
+      }))).status, 409, suffix);
+    }
+    assert.equal((await list(request, tokens.ipad)).body.items[0].session.episode.episode, 4);
+  })
+);
+
 test('stale offline write cannot rewind another device', () => fixture(async ({ request }) => {
   await post(request, tokens.ipad, event('START', 0, { session: initial }));
   const progress = event('PROGRESS', 1, {

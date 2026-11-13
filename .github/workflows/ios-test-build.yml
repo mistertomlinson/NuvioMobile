@@ -141,6 +141,7 @@ jobs:
               "NUVIO_SUPABASE_ANON_KEY",
               "TMDB_API_KEY",
               "SIMKL_CLIENT_ID",
+              "SIMKL_REDIRECT_URI",
           )
           if not properties.is_file():
               raise SystemExit(
@@ -162,7 +163,7 @@ jobs:
                   + ", ".join(missing)
                   + ". Do not distribute this IPA."
               )
-          print("Required Nuvio, TMDB, and Simkl build keys are present (values hidden).")
+          print("Required Nuvio, TMDB, and Simkl client/redirect build keys are present (values hidden).")
           PY
 
       - name: Build unsigned full ${{ inputs.configuration }} IPA

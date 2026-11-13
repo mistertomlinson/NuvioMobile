@@ -45,6 +45,7 @@ class RewatchPlayerSessionBootstrapTest {
         requestedEpisode: RewatchEpisode = episode,
         now: Long = 2_000L,
         explicitManualSelection: Boolean = false,
+        resumePositionMs: Long? = null,
         onCommitted: suspend (RewatchSession?, RewatchSession) -> Unit = { _, _ -> },
     ) = resolveOrStartRewatchForPlayback(
         store = store,
@@ -57,6 +58,7 @@ class RewatchPlayerSessionBootstrapTest {
         createSessionId = { "replay-2" },
         nowEpochMs = { now },
         explicitManualEpisodeSelection = explicitManualSelection,
+        manualResumePositionMs = resumePositionMs,
         onCommitted = onCommitted
     )
 
@@ -142,6 +144,23 @@ class RewatchPlayerSessionBootstrapTest {
         assertEquals(1, store.writes)
         assertEquals(previous, commits.single().first)
         assertEquals(updated, commits.single().second)
+    }
+
+    @Test
+    fun explicitDetailsResumePreservesOffsetButNotPreviousEpisodeCompletion() = runTest {
+        val store = FakeStore()
+        store.sessions[profileId] = listOf(stored())
+        val moved = assertNotNull(bootstrap(
+            store,
+            requestedEpisode = RewatchEpisode(5, 19),
+            explicitManualSelection = true,
+            resumePositionMs = 391_000L,
+            watched = { true }
+        ))
+        assertEquals(391_000L, moved.positionMs)
+        assertEquals(0L, moved.durationMs)
+        assertNull(moved.lastCompletedEpisode)
+        assertEquals(RewatchPhase.PLAYING, moved.phase)
     }
 
     @Test

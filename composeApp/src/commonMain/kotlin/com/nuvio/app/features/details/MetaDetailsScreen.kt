@@ -820,6 +820,17 @@ fun MetaDetailsScreen(
                     when {
                         shufflePoolEmpty -> showShuffle = true
                         (meta.type == "series" || hasEpisodes) && seriesAction != null -> {
+                            val season = seriesAction.seasonNumber
+                            val number = seriesAction.episodeNumber
+                            if (onPlay != null && season != null && season > 0 &&
+                                number != null && number > 0) {
+                                RewatchManualEpisodeSelection.arm(
+                                    ProfileRepository.activeProfileId, meta.id,
+                                    RewatchEpisode(season, number),
+                                    WatchProgressClock.nowEpochMs(),
+                                    seriesAction.resumePositionMs
+                                )
+                            }
                             onPlay?.invoke(
                                 meta.type,
                                 seriesStreamVideoId ?: seriesAction.videoId,
@@ -866,6 +877,17 @@ fun MetaDetailsScreen(
                         {
                             when {
                                 (meta.type == "series" || hasEpisodes) && seriesAction != null -> {
+                                    val season = seriesAction.seasonNumber
+                                    val number = seriesAction.episodeNumber
+                                    if (season != null && season > 0 &&
+                                        number != null && number > 0) {
+                                        RewatchManualEpisodeSelection.arm(
+                                            ProfileRepository.activeProfileId, meta.id,
+                                            RewatchEpisode(season, number),
+                                            WatchProgressClock.nowEpochMs(),
+                                            seriesAction.resumePositionMs
+                                        )
+                                    }
                                     manualPlay(
                                         meta.type,
                                         seriesStreamVideoId ?: seriesAction.videoId,
@@ -927,7 +949,8 @@ fun MetaDetailsScreen(
                             ProfileRepository.activeProfileId,
                             meta.id,
                             RewatchEpisode(season, episode),
-                            WatchProgressClock.nowEpochMs()
+                            WatchProgressClock.nowEpochMs(),
+                            savedProgress?.lastPositionMs
                         )
                     }
                     onPlay?.invoke(
@@ -969,7 +992,8 @@ fun MetaDetailsScreen(
                             ProfileRepository.activeProfileId,
                             meta.id,
                             RewatchEpisode(season, episode),
-                            WatchProgressClock.nowEpochMs()
+                            WatchProgressClock.nowEpochMs(),
+                            savedProgress?.lastPositionMs
                         )
                     }
                     onPlayManually?.invoke(

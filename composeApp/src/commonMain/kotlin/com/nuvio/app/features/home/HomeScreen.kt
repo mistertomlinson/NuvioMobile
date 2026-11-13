@@ -101,6 +101,8 @@ import com.nuvio.app.features.rewatch.RewatchPhase
 import com.nuvio.app.features.rewatch.RewatchSessionRepository
 import com.nuvio.app.features.rewatch.RewatchMobileSyncGate
 import com.nuvio.app.features.rewatch.RewatchPlatformSyncLifecycle
+import com.nuvio.app.features.rewatch.RewatchIpadCommitHandoff
+import com.nuvio.app.features.rewatch.notifyCommittedRewatchSave
 import com.nuvio.app.features.rewatch.resolvePendingRewatchSuccessor
 import com.nuvio.app.features.player.verifiedPlayerRewatchCompletionCatalog
 import kotlinx.coroutines.async
@@ -398,13 +400,25 @@ fun HomeScreen(
                                     orderedPlayableEpisodes = catalog.orderedEpisodes,
                                     metadataComplete = true
                                 )
-                                if (updated != original &&
+                                val saved = updated != original &&
                                     ProfileRepository.activeProfileId == activeProfileId &&
                                     RewatchSessionRepository.upsert(
                                         profileId = activeProfileId,
                                         session = updated
                                     )
-                                ) updated else original
+                                if (saved && RewatchMobileSyncGate.ENABLED) {
+                                    // A metadata-only completion changes the
+                                    // replay cursor and must reach linked devices.
+                                    notifyCommittedRewatchSave(
+                                        sink = RewatchIpadCommitHandoff.sink,
+                                        accepted = true,
+                                        profileId = activeProfileId,
+                                        activeProfileId = { ProfileRepository.activeProfileId },
+                                        before = original,
+                                        after = updated
+                                    )
+                                }
+                                if (saved) updated else original
                             } else original
                         } else original
 

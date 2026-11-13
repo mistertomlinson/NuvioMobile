@@ -944,7 +944,8 @@ fun MetaDetailsScreen(
                         episodeNumber = episode,
                     )
                         ?.takeUnless { it.isCompleted }
-                    if (onPlay != null && season > 0 && episode > 0) {
+                    if (onPlay != null && season != null && season > 0 &&
+                        episode != null && episode > 0) {
                         RewatchManualEpisodeSelection.arm(
                             ProfileRepository.activeProfileId,
                             meta.id,
@@ -987,7 +988,8 @@ fun MetaDetailsScreen(
                         episodeNumber = episode,
                     )
                         ?.takeUnless { it.isCompleted }
-                    if (onPlayManually != null && season > 0 && episode > 0) {
+                    if (onPlayManually != null && season != null && season > 0 &&
+                        episode != null && episode > 0) {
                         RewatchManualEpisodeSelection.arm(
                             ProfileRepository.activeProfileId,
                             meta.id,

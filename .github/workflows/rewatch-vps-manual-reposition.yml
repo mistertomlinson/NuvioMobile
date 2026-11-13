@@ -1,0 +1,39 @@
+name: Validate rewatch VPS manual reposition
+
+on:
+  push:
+    branches:
+      - fix/rewatch-manual-reposition-vps-20261113
+    paths:
+      - 'services/rewatch-sync/**'
+      - '.github/workflows/rewatch-vps-manual-reposition.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rewatch-vps:
+    name: Replay store and authorization regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax and all server regressions
+        working-directory: services/rewatch-sync
+        run: |
+          node --check store.mjs
+          node --check server.mjs
+          npm test
+      - name: Summarize
+        run: |
+          {
+            echo '## Rewatch VPS'
+            echo 'REPOSITION_TESTS=PASSED'
+            echo 'LIVE_SERVICE=UNTOUCHED'
+            echo 'LIVE_DATABASE=UNTOUCHED'
+            echo "HEAD=$(git rev-parse --short HEAD)"
+          } >> "$GITHUB_STEP_SUMMARY"

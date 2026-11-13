@@ -123,6 +123,22 @@ internal fun planCommittedRewatchEvent(
         } else {
             if (before == after) return null
             when {
+                // A manually selected, already-watched episode can move
+                // forward OR backward within the same authenticated session.
+                // Autoplay's NEXT_UP transition is handled by COMPLETE_EPISODE,
+                // and cannot masquerade as this zero-position PLAYING move.
+                before.phase in setOf(
+                    RewatchPhase.PLAYING,
+                    RewatchPhase.NEXT_UP,
+                    RewatchPhase.AWAITING_METADATA
+                ) &&
+                    before.episode != after.episode &&
+                    after.phase == RewatchPhase.PLAYING &&
+                    after.positionMs == 0L && after.durationMs == 0L &&
+                    after.lastCompletedEpisode == null -> {
+                    type = "REPOSITION"
+                    episode = after.episode
+                }
                 before.phase == RewatchPhase.AWAITING_METADATA &&
                     after.lastCompletedEpisode == before.lastCompletedEpisode &&
                     after.lastCompletedEpisode == before.episode &&

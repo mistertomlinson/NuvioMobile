@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/persistent-simkl-rewatch-0.6.7
+      - test/rewatch-public-https-20261112
     paths:
       - 'composeApp/src/**'
       - 'composeApp/build.gradle.kts'
@@ -34,7 +35,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
       GRADLE_OPTS: -Dfile.encoding=UTF-8
-      IOS_CONFIGURATION: ${{ inputs.configuration }}
+      IOS_CONFIGURATION: ${{ inputs.configuration || 'Release' }}
       KOTLIN_DAEMON_JVMARGS: -Xmx2048M
       NUVIO_GRADLE_JVMARGS: -Xmx4608M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=768M
       NUVIO_KOTLIN_NATIVE_JVMARGS: -Xmx4608M
@@ -117,6 +118,15 @@ jobs:
             echo "1,675 passed, 3 unrelated tests failed."
             echo "HEAD=$(git rev-parse --short HEAD)"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify isolated HTTPS test branch uses enabled replay gate
+        if: github.ref == 'refs/heads/test/rewatch-public-https-20261112'
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'const val ENABLED = true' composeApp/src/commonMain/kotlin/com/nuvio/app/features/rewatch/RewatchCommittedSaveHandoff.kt
+          grep -q 'isolatedIpadDeviceTestEnablesReplayOnlySyncButDoesNotAutoInstallSink' composeApp/src/commonTest/kotlin/com/nuvio/app/features/rewatch/RewatchCommittedSaveHandoffTest.kt
+          echo 'REWATCH_IPAD_SYNC=ENABLED_IN_ISOLATED_TEST_BRANCH'
 
       - name: Refuse incomplete full-release runtime configuration
         if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'

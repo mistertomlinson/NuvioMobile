@@ -133,7 +133,7 @@ test('backward manual reposition is allowed but stale events and malformed reque
     for (const [suffix, fields] of [
       ['same', { episode: { season: 2, episode: 4 } }],
       ['nonseason', { episode: { season: 0, episode: 5 } }],
-      ['inject', { episode: { season: 2, episode: 5 }, positionMs: 6000 }],
+      ['inject', { episode: { season: 2, episode: 5 }, nextEpisode: { season: 2, episode: 6 } }],
       ['add-session', { episode: { season: 2, episode: 5 }, session: initial }]
     ]) {
       assert.equal((await post(request, tokens.ipad, event('REPOSITION', 2, {

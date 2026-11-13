@@ -114,6 +114,23 @@ class RewatchCommittedEventPlannerTest {
     }
 
     @Test
+    fun explicitDetailsResumeCarriesOffsetToOtherDevices() {
+        val moved = original.copy(
+            episode = RewatchEpisode(5, 19),
+            positionMs = 391_000L,
+            durationMs = 0L,
+            lastCompletedEpisode = null,
+            phase = RewatchPhase.PLAYING
+        )
+        val queued = requireNotNull(plan(original, moved,
+            RewatchRemoteCheckpoint.Synced(17, original.sessionId)))
+        val payload = data(queued)
+        assertEquals("REPOSITION", payload["type"]?.jsonPrimitive?.content)
+        assertEquals("391000", payload["positionMs"]?.toString())
+        assertEquals("0", payload["durationMs"]?.toString())
+    }
+
+    @Test
     fun autoplayCompletionAndArbitraryProgressNeverForgeReposition() {
         val next = original.copy(
             episode = s3e6,

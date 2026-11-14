@@ -210,6 +210,20 @@ class RewatchConflictRecoveryTest {
     }
 
     @Test
+    fun unrelatedSeriesAtTheQueueHeadMustNotTriggerOfficeRecovery() = runBlocking {
+        val storage = MemoryStorage()
+        val queue = queue(storage)
+        val other = legacy("other-show-head").copy(
+            canonicalSeriesId = "tt1111111"
+        )
+        queue.enqueue(profile, account, device, other)
+        queue.enqueue(profile, account, device, legacy())
+        val original = storage.json
+        assertFalse(recover(queue))
+        assertEquals(original, storage.json)
+    }
+
+    @Test
     fun typedInvalidProgressNeverDropsTheHeadWithoutManualRecovery() = runBlocking {
         val storage = MemoryStorage()
         val queue = queue(storage)

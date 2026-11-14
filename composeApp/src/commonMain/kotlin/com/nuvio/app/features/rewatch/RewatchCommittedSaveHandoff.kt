@@ -12,6 +12,17 @@ internal fun interface RewatchCommittedSaveSink {
         before: RewatchSession?,
         after: RewatchSession
     )
+
+    // Ordinary committed saves retain their original, unprivileged path.
+    // Only a player-verified manual episode jump may supply explicit intent.
+    suspend fun committedWithIntent(
+        profileId: Int,
+        before: RewatchSession?,
+        after: RewatchSession,
+        manualRepositionApproved: Boolean
+    ) {
+        committed(profileId, before, after)
+    }
 }
 
 internal object RewatchMobileSyncGate {
@@ -47,7 +58,8 @@ internal suspend fun notifyCommittedRewatchSave(
     profileId: Int,
     activeProfileId: () -> Int,
     before: RewatchSession?,
-    after: RewatchSession
+    after: RewatchSession,
+    manualEpisodeSelection: Boolean = false
 ) {
     if (!accepted || profileId <= 0 ||
         activeProfileId() != profileId ||
@@ -59,7 +71,9 @@ internal suspend fun notifyCommittedRewatchSave(
             )
         ))) return
     try {
-        sink.committed(profileId, before, after)
+        sink.committedWithIntent(
+            profileId, before, after, manualEpisodeSelection
+        )
     } catch (error: CancellationException) {
         throw error
     } catch (_: Exception) {
@@ -90,6 +104,13 @@ internal class RewatchCommittedOutboxSink(
         profileId: Int,
         before: RewatchSession?,
         after: RewatchSession
+    ) = committedWithIntent(profileId, before, after, false)
+
+    override suspend fun committedWithIntent(
+        profileId: Int,
+        before: RewatchSession?,
+        after: RewatchSession,
+        manualRepositionApproved: Boolean
     ) {
         val identity = currentIdentity() ?: return
         if (identity.profileId != profileId) return
@@ -102,7 +123,8 @@ internal class RewatchCommittedOutboxSink(
             before = before,
             after = after,
             checkpoint = proof,
-            eventId = eventId()
+            eventId = eventId(),
+            manualRepositionApproved = manualRepositionApproved
         )
     }
 }

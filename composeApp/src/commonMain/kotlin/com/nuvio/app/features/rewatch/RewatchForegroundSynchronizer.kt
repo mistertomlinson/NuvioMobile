@@ -63,7 +63,7 @@ internal class RewatchForegroundSynchronizer(
         // before any state merge and never drops the event.
         when (access.upload()) {
             RewatchOutboxDrainResult.EMPTY, RewatchOutboxDrainResult.DRAINED -> Unit
-            RewatchOutboxDrainResult.CONFLICT ->
+            RewatchOutboxDrainResult.CONFLICT, RewatchOutboxDrainResult.INVALID_PROGRESS ->
                 return RewatchForegroundResult.LOCAL_CONFLICT
             RewatchOutboxDrainResult.PROFILE_CHANGED ->
                 return RewatchForegroundResult.PROFILE_CHANGED
@@ -148,7 +148,7 @@ internal class RewatchForegroundSynchronizer(
                 else RewatchForegroundResult.PROFILE_CHANGED
             RewatchOutboxDrainResult.PROFILE_CHANGED ->
                 RewatchForegroundResult.PROFILE_CHANGED
-            RewatchOutboxDrainResult.CONFLICT ->
+            RewatchOutboxDrainResult.CONFLICT, RewatchOutboxDrainResult.INVALID_PROGRESS ->
                 RewatchForegroundResult.LOCAL_CONFLICT
             RewatchOutboxDrainResult.UNAUTHORIZED, RewatchOutboxDrainResult.UNAVAILABLE ->
                 RewatchForegroundResult.UNAVAILABLE

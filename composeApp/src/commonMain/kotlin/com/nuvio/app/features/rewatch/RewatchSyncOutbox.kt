@@ -236,7 +236,8 @@ internal class RewatchSyncOutbox(
         before: RewatchSession?,
         after: RewatchSession,
         checkpoint: RewatchRemoteCheckpoint,
-        eventId: String
+        eventId: String,
+        manualRepositionApproved: Boolean = false
     ): Boolean = mutex.withLock {
         if (!stillCurrent(profileId, simklAccountId, deviceId) ||
             after.ownerKey != "local-profile:$profileId") return@withLock false
@@ -275,7 +276,8 @@ internal class RewatchSyncOutbox(
             after = after,
             checkpoint = effectiveCheckpoint,
             eventId = eventId,
-            deviceId = deviceId
+            deviceId = deviceId,
+            manualRepositionApproved = manualRepositionApproved
         ) ?: return@withLock false
         if (!stillCurrent(profileId, simklAccountId, deviceId)) return@withLock false
         storage.write(profileId, json.encodeToString(

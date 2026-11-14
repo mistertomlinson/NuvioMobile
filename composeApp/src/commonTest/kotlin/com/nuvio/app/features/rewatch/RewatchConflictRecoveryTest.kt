@@ -191,7 +191,7 @@ class RewatchConflictRecoveryTest {
             value
         }))
         assertEquals(original, storage.json)
-        val differentAccount = queue(storage) { _, id, _ -> id == "other" }
+        val differentAccount = RewatchSyncOutbox(storage) { _, id, _ -> id == "other" }
         assertFalse(recover(differentAccount))
         assertEquals(original, storage.json)
     }

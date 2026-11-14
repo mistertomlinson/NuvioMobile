@@ -101,15 +101,54 @@ internal object IosRewatchSyncRuntime {
             outbox = outbox,
             eventId = { NSUUID().UUIDString }
         )
-        RewatchDispatchingCommittedSaveSink(durableOutboxSink) { profileId, after ->
+        RewatchDispatchingCommittedSaveSink(durableOutboxSink) {
+                profileId, before, after, approvedManualSelection ->
             if (RewatchMobileSyncGate.ENABLED &&
                 after.ownerKey == "local-profile:$profileId") {
-                // Never make an outgoing request in a playback EOF/local-save
-                // callback. The outbox is persisted first; network work is
-                // a separate, cancellable process-lifetime coroutine.
+                // No network work inside the already committed playback save.
+                // A server-confirmed invalid progress chain can only be
+                // recovered by another explicit, watched-verified picker click.
                 syncScope.launch {
                     try {
-                        val drain = uploadPending()
+                        var drain = uploadPending()
+                        if (drain == RewatchOutboxDrainResult.INVALID_PROGRESS &&
+                            approvedManualSelection && before != null) {
+                            val identity = ensureOnlineIdentity()
+                            if (identity != null && identity.profileId == profileId) {
+                                val series = after.canonicalSeriesId
+                                val lookup = transport.fetchCheckpointForSeries(series)
+                                val observed = RewatchSessionRepository.observeSync(profileId)
+                                val latest = observed.sessions.singleOrNull {
+                                    it.canonicalSeriesId.trim().equals(
+                                        series.trim(), ignoreCase = true
+                                    )
+                                }
+                                if (latest != null && currentIdentity() == identity) {
+                                    val repaired = outbox.recoverExplicitManualSelection(
+                                        profileId = profileId,
+                                        simklAccountId = identity.simklAccountId,
+                                        deviceId = identity.deviceId,
+                                        manualBefore = before,
+                                        manualAfter = after,
+                                        latestLocal = latest,
+                                        lookup = lookup,
+                                        repositionEventId = NSUUID().UUIDString,
+                                        progressEventId = NSUUID().UUIDString,
+                                        localUnchanged = {
+                                            if (currentIdentity() != identity) false
+                                            else {
+                                                val again = RewatchSessionRepository
+                                                    .observeSync(profileId)
+                                                again.profileId == observed.profileId &&
+                                                    again.generation == observed.generation &&
+                                                    again.sessions == observed.sessions
+                                            }
+                                        }
+                                    )
+                                    if (repaired) drain = uploadPending()
+                                }
+                            }
+                        }
                         if (drain == RewatchOutboxDrainResult.EMPTY ||
                             drain == RewatchOutboxDrainResult.DRAINED) {
                             reconcileForeground(after.canonicalSeriesId)
@@ -117,7 +156,8 @@ internal object IosRewatchSyncRuntime {
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
-                        // Preserve offline state; never write Simkl history.
+                        // Preserve replay-only local state, including the
+                        // original durable queue, on any failed repair.
                     }
                 }
             }

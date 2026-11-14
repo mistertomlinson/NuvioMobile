@@ -128,7 +128,9 @@ internal suspend fun PlayerScreenRuntime.classifyRewatchBeforeTracking() {
                     profileId = selectedProfile,
                     activeProfileId = { ProfileRepository.activeProfileId },
                     before = before,
-                    after = after
+                    after = after,
+                    manualEpisodeSelection = manualSelection != null &&
+                        before != null && before.episode != after.episode
                 )
             }
         )

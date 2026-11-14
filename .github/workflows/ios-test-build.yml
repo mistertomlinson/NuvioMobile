@@ -30,13 +30,15 @@ concurrency:
 
 jobs:
   build:
-    name: Build unsigned full ${{ inputs.configuration }} IPA
+    name: Build unsigned full ${{ inputs.configuration || (github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113' && 'Debug' || 'Release') }} IPA
     runs-on: xcode-27
     timeout-minutes: ${{ (github.ref == 'refs/heads/test/rewatch-public-https-20261112' || github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113') && 150 || (github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && 75 || (inputs.configuration == 'Release' && 75 || 30)) }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
       GRADLE_OPTS: -Dfile.encoding=UTF-8
-      IOS_CONFIGURATION: ${{ inputs.configuration || 'Release' }}
+      # The device-test branch builds Debug on push. Release linking exceeded
+      # the 150-minute job after the 180 rewatch tests had already passed.
+      IOS_CONFIGURATION: ${{ inputs.configuration || (github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113' && 'Debug' || 'Release') }}
       KOTLIN_DAEMON_JVMARGS: -Xmx2048M
       NUVIO_GRADLE_JVMARGS: -Xmx4608M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=768M
       NUVIO_KOTLIN_NATIVE_JVMARGS: -Xmx4608M
@@ -129,8 +131,35 @@ jobs:
       - name: Prepare iOS dependencies
         run: ./scripts/prepare-ios-dependencies.sh
 
+      - name: Verify pinned iPad code already passed 180 simulator tests
+        if: github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Successful simulator validation: Actions run 43534230190.
+          # This is build-only ONLY when the app code/dependencies still
+          # exactly match that validated commit. Any change fails closed.
+          test "$(git rev-parse HEAD:composeApp)" = "efde007e65e8f899a305db37cfb883af9579986c"
+          test "$(git rev-parse HEAD:gradle)" = "763a465893baee515fabf0c275bf4c8b9a0ed146"
+          test "$(git rev-parse HEAD:scripts)" = "ff852f3e4998246d9f1bb1274bd3d6d727759cd8"
+          test "$(git rev-parse HEAD:build.gradle.kts)" = "d44c87655d18a09d04f1015c9a20a47a0c6ed8d2"
+          test "$(git rev-parse HEAD:settings.gradle.kts)" = "884dc8e9415c2bc31f4f4e7128c0265c5202f582"
+          # Debug test IPA must retain the same app/widget identifiers
+          # as the existing Release app, so in-place update remains possible.
+          python3 - <<'PY'
+          from pathlib import Path
+          project = Path("iosApp/iosApp.xcodeproj/project.pbxproj").read_text()
+          if project.count("PRODUCT_BUNDLE_IDENTIFIER = com.nuvio.media;") != 2:
+              raise SystemExit("::error::Debug/Release application identity mismatch")
+          if project.count("PRODUCT_BUNDLE_IDENTIFIER = com.nuvio.media.DownloadsWidgetExtension;") != 2:
+              raise SystemExit("::error::Debug/Release widget identity mismatch")
+          PY
+          echo "REWATCH_IOS_TESTS=180_PASSED_IN_PRIOR_RUN_43534230190"
+          echo "CURRENT_SOURCE_TREE=IDENTICAL_TO_TESTED_CODE"
+          echo "BUILD_CONFIGURATION=$IOS_CONFIGURATION"
+
       - name: Validate rewatch-specific iOS simulator tests
-        if: github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' || github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113'
+        if: github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
         run: |
           # Prior full-suite validation compiled successfully, but three
           # untouched legacy tests failed: ChapterSkipIntervalsTest (two)
@@ -144,7 +173,7 @@ jobs:
             --console=plain
 
       - name: Summarize rewatch validation
-        if: github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' || github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113'
+        if: github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
         run: |
           {
             echo "## Focused iPad rewatch validation"
@@ -154,6 +183,17 @@ jobs:
             echo "Full suite at 8b4a3b3fd3 compiled and executed 1,678 tests:"
             echo "1,675 passed, 3 unrelated tests failed."
             echo "HEAD=$(git rev-parse --short HEAD)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record previously validated iPad test scope
+        if: github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113'
+        run: |
+          {
+            echo "## Previously validated rewatch tests"
+            echo "The unchanged iPad source passed 180/180 iOS simulator rewatch tests."
+            echo "Passed run: https://github.com/mistertomlinson/NuvioMobile/actions/runs/43534230190"
+            echo "Current job skips recompiling simulator tests so the IPA build gets the whole 150-minute window."
+            echo "The Debug IPA retains the Release app and widget bundle identifiers."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify isolated HTTPS test branch uses enabled replay gate

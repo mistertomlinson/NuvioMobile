@@ -35,6 +35,48 @@ class RewatchCommittedSaveHandoffTest {
         assertEquals(progressed, calls.single().second)
     }
 
+    @Test fun onlyVerifiedManualSelectionCanEnterRepositionOutbox() = runBlocking {
+        val saved = mutableMapOf<Int, String>()
+        val storage = object : RewatchOutboxStorage {
+            override suspend fun read(profileId: Int) = saved[profileId]
+            override suspend fun write(profileId: Int, payload: String) {
+                saved[profileId] = payload
+            }
+        }
+        val outbox = RewatchSyncOutbox(storage) { profileId, accountId, deviceId ->
+            profileId == 2 && accountId == "12003" &&
+                deviceId == "simkl-device:manual-test"
+        }
+        val sink = RewatchCommittedOutboxSink(
+            currentIdentity = {
+                RewatchCommitIdentity(2, "12003", "simkl-device:manual-test")
+            },
+            checkpoint = { _, _ ->
+                RewatchRemoteCheckpoint.Synced(3, replay.sessionId)
+            },
+            outbox = outbox,
+            eventId = { "manual-reposition-1" }
+        )
+        val moved = replay.copy(
+            episode = RewatchEpisode(5, 19),
+            positionMs = 391_000L,
+            durationMs = 0L,
+            lastCompletedEpisode = null,
+            phase = RewatchPhase.PLAYING,
+            updatedAtEpochMs = 200L
+        )
+        notifyCommittedRewatchSave(
+            sink, true, 2, { 2 }, replay, moved
+        )
+        assertEquals(0, outbox.pendingCount(2, "12003", "simkl-device:manual-test"))
+        notifyCommittedRewatchSave(
+            sink, true, 2, { 2 }, replay, moved,
+            manualEpisodeSelection = true
+        )
+        assertEquals(1, outbox.pendingCount(2, "12003", "simkl-device:manual-test"))
+        assertTrue(saved[2]?.contains("REPOSITION") == true)
+    }
+
     @Test fun accountProfileChangeBlocksStaleCommittedReplay() = runBlocking {
         var calls = 0
         val sink = RewatchCommittedSaveSink { _, _, _ -> calls++ }

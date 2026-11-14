@@ -363,7 +363,12 @@ internal class RewatchSyncOutbox(
         val pending = old.pending.filter {
             seriesKey(it.canonicalSeriesId) == key
         }
+        // INVALID_PROGRESS describes the global queue head only. Never
+        // repair an unrelated show because some other series hit a 409.
         if (pending.isEmpty() ||
+            old.pending.firstOrNull()?.let {
+                seriesKey(it.canonicalSeriesId)
+            } != key ||
             old.recoveryArchive.size + pending.size > 1000 ||
             old.recoveryArchive.any {
                 it.eventId == repositionEventId || it.eventId == progressEventId

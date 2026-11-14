@@ -385,7 +385,7 @@ internal class RewatchSyncOutbox(
             return@withLock false
         }
         if (firstEpisode?.get("season")?.jsonPrimitive?.intOrNull == null ||
-            firstEpisode["episode"]?.jsonPrimitive?.intOrNull == null)
+            firstEpisode?.get("episode")?.jsonPrimitive?.intOrNull == null)
             return@withLock false
 
         if (pending.first().expectedRevision != checkpoint.revision ||

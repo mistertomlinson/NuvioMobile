@@ -381,7 +381,7 @@ internal class RewatchSyncOutbox(
         val firstEpisode = firstPayload["episode"]?.jsonObject
         if (firstPayload["type"]?.jsonPrimitive?.content != "PROGRESS" ||
             firstEpisode?.get("season")?.jsonPrimitive?.intOrNull == remote.episode.season &&
-            firstEpisode["episode"]?.jsonPrimitive?.intOrNull == remote.episode.episode) {
+            firstEpisode?.get("episode")?.jsonPrimitive?.intOrNull == remote.episode.episode) {
             return@withLock false
         }
         if (firstEpisode?.get("season")?.jsonPrimitive?.intOrNull == null ||

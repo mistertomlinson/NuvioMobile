@@ -109,12 +109,13 @@ internal interface RewatchOutboxStorage {
 internal sealed interface RewatchOutboxSubmitResult {
     data class Accepted(val revision: Long) : RewatchOutboxSubmitResult
     data object Conflict : RewatchOutboxSubmitResult
+    data object InvalidProgress : RewatchOutboxSubmitResult
     data object Unavailable : RewatchOutboxSubmitResult
     data object Unauthorized : RewatchOutboxSubmitResult
 }
 
 internal enum class RewatchOutboxDrainResult {
-    EMPTY, DRAINED, CONFLICT, UNAVAILABLE, UNAUTHORIZED, PROFILE_CHANGED
+    EMPTY, DRAINED, CONFLICT, INVALID_PROGRESS, UNAVAILABLE, UNAUTHORIZED, PROFILE_CHANGED
 }
 
 internal class RewatchSyncOutbox(
@@ -338,6 +339,8 @@ internal class RewatchSyncOutbox(
                 }
                 RewatchOutboxSubmitResult.Conflict ->
                     return@withLock RewatchOutboxDrainResult.CONFLICT
+                RewatchOutboxSubmitResult.InvalidProgress ->
+                    return@withLock RewatchOutboxDrainResult.INVALID_PROGRESS
                 RewatchOutboxSubmitResult.Unauthorized ->
                     return@withLock RewatchOutboxDrainResult.UNAUTHORIZED
                 RewatchOutboxSubmitResult.Unavailable ->

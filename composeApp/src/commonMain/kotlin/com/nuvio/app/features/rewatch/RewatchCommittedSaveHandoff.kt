@@ -90,7 +90,12 @@ internal suspend fun notifyCommittedRewatchSave(
  */
 internal class RewatchDispatchingCommittedSaveSink(
     private val durableSink: RewatchCommittedSaveSink,
-    private val scheduleUpload: (profileId: Int, after: RewatchSession) -> Unit
+    private val scheduleUpload: (
+        profileId: Int,
+        before: RewatchSession?,
+        after: RewatchSession,
+        manualRepositionApproved: Boolean
+    ) -> Unit
 ) : RewatchCommittedSaveSink {
     override suspend fun committed(
         profileId: Int, before: RewatchSession?, after: RewatchSession
@@ -106,7 +111,7 @@ internal class RewatchDispatchingCommittedSaveSink(
         durableSink.committedWithIntent(
             profileId, before, after, manualRepositionApproved
         )
-        scheduleUpload(profileId, after)
+        scheduleUpload(profileId, before, after, manualRepositionApproved)
     }
 }
 

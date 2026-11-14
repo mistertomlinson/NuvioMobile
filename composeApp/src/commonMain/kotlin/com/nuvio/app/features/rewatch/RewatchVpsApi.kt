@@ -6,6 +6,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Rewatch-only API client. No Simkl watched-history or scrobble API usage.
@@ -147,7 +148,18 @@ internal class RewatchVpsApi(
         val raw = call("POST", "/v1/rewatches/events", credential.token, event.payload)
             ?: return RewatchOutboxSubmitResult.Unavailable
         if (raw.status == 401 || raw.status == 403) return RewatchOutboxSubmitResult.Unauthorized
-        if (raw.status == 409) return RewatchOutboxSubmitResult.Conflict
+        if (raw.status == 409) {
+            // Preserve the precise, server-verified rejection without logging
+            // the request, token or response payload. Only this error permits
+            // the strictly user-initiated recovery path.
+            val reason = runCatching {
+                json.parseToJsonElement(raw.body).jsonObject["error"]
+                    ?.jsonPrimitive?.content
+            }.getOrNull()
+            return if (reason == "invalid_progress")
+                RewatchOutboxSubmitResult.InvalidProgress
+            else RewatchOutboxSubmitResult.Conflict
+        }
         if (raw.status != 200) return RewatchOutboxSubmitResult.Unavailable
         // Server must confirm monotonic revision before an outbox event is dropped.
         val revision = runCatching {

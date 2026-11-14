@@ -70,7 +70,8 @@ internal fun planCommittedRewatchEvent(
     after: RewatchSession,
     checkpoint: RewatchRemoteCheckpoint,
     eventId: String,
-    deviceId: String
+    deviceId: String,
+    manualRepositionApproved: Boolean = false
 ): RewatchQueuedEvent? {
     if (!safeRewatchSession(after) ||
         eventId.isBlank() || eventId.length > 160 ||
@@ -134,6 +135,12 @@ internal fun planCommittedRewatchEvent(
                 ) &&
                     before.episode != after.episode &&
                     after.phase == RewatchPhase.PLAYING &&
+                    // An episode difference alone is not manual-selection evidence.
+                    // This flag may only originate at the player's consumed,
+                    // watched-history-verified manual-selection boundary.
+                    manualRepositionApproved &&
+                    after.updatedAtEpochMs > before.updatedAtEpochMs &&
+                    after.durationMs == 0L &&
                     // A details-page Resume may carry its previously saved
                     // offset. Duration zero means unknown until player starts.
                     after.lastCompletedEpisode == null -> {

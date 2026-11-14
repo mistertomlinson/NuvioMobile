@@ -86,6 +86,26 @@ class RewatchVpsApiTest {
     }
 
     @Test
+    fun serverInvalidProgressIsDistinguishedButOtherConflictsStayBlocked() =
+        runBlocking {
+            val invalidProgress = RewatchVpsApi(RewatchHttpExchange { _, _, _, _ ->
+                RewatchHttpResponse(409, """{"error":"invalid_progress"}""")
+            })
+            assertEquals(RewatchOutboxSubmitResult.InvalidProgress,
+                invalidProgress.submit(credential, event()))
+            for (reason in listOf(
+                "revision_conflict", "session_mismatch", "invalid_reposition",
+                "existing_remote_session"
+            )) {
+                val other = RewatchVpsApi(RewatchHttpExchange { _, _, _, _ ->
+                    RewatchHttpResponse(409, """{"error":"$reason"}""")
+                })
+                assertEquals(RewatchOutboxSubmitResult.Conflict,
+                    other.submit(credential, event()))
+            }
+        }
+
+    @Test
     fun authenticatedAcceptedEventRequiresHigherServerRevision() = runBlocking {
         val okay = RewatchVpsApi(RewatchHttpExchange { _, _, _, _ ->
             RewatchHttpResponse(200, """{"schemaVersion":1,"revision":1}""")

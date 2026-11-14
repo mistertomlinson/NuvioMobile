@@ -47,7 +47,7 @@ class RewatchCommittedSaveHandoffTest {
             profileId == 2 && accountId == "12003" &&
                 deviceId == "simkl-device:manual-test"
         }
-        val sink = RewatchCommittedOutboxSink(
+        val durableSink = RewatchCommittedOutboxSink(
             currentIdentity = {
                 RewatchCommitIdentity(2, "12003", "simkl-device:manual-test")
             },
@@ -57,6 +57,10 @@ class RewatchCommittedSaveHandoffTest {
             outbox = outbox,
             eventId = { "manual-reposition-1" }
         )
+        var scheduledUploads = 0
+        val sink = RewatchDispatchingCommittedSaveSink(durableSink) { _, _ ->
+            scheduledUploads++
+        }
         val moved = replay.copy(
             episode = RewatchEpisode(5, 19),
             positionMs = 391_000L,
@@ -75,6 +79,7 @@ class RewatchCommittedSaveHandoffTest {
         )
         assertEquals(1, outbox.pendingCount(2, "12003", "simkl-device:manual-test"))
         assertTrue(saved[2]?.contains("REPOSITION") == true)
+        assertEquals(2, scheduledUploads)
     }
 
     @Test fun accountProfileChangeBlocksStaleCommittedReplay() = runBlocking {

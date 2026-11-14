@@ -101,8 +101,7 @@ internal object IosRewatchSyncRuntime {
             outbox = outbox,
             eventId = { NSUUID().UUIDString }
         )
-        RewatchCommittedSaveSink { profileId, before, after ->
-            durableOutboxSink.committed(profileId, before, after)
+        RewatchDispatchingCommittedSaveSink(durableOutboxSink) { profileId, after ->
             if (RewatchMobileSyncGate.ENABLED &&
                 after.ownerKey == "local-profile:$profileId") {
                 // Never make an outgoing request in a playback EOF/local-save

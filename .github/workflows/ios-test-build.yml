@@ -131,32 +131,16 @@ jobs:
       - name: Prepare iOS dependencies
         run: ./scripts/prepare-ios-dependencies.sh
 
-      - name: Verify pinned iPad code already passed 180 simulator tests
+      - name: Validate iPad upload intent regression in simulator
         if: github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113'
-        shell: bash
         run: |
-          set -euo pipefail
-          # Successful simulator validation: Actions run 43534230190.
-          # This is build-only ONLY when the app code/dependencies still
-          # exactly match that validated commit. Any change fails closed.
-          test "$(git rev-parse HEAD:composeApp)" = "efde007e65e8f899a305db37cfb883af9579986c"
-          test "$(git rev-parse HEAD:gradle)" = "763a465893baee515fabf0c275bf4c8b9a0ed146"
-          test "$(git rev-parse HEAD:scripts)" = "ff852f3e4998246d9f1bb1274bd3d6d727759cd8"
-          test "$(git rev-parse HEAD:build.gradle.kts)" = "d44c87655d18a09d04f1015c9a20a47a0c6ed8d2"
-          test "$(git rev-parse HEAD:settings.gradle.kts)" = "884dc8e9415c2bc31f4f4e7128c0265c5202f582"
-          # Assert app/widget identity consistency for any later Debug build;
-          # this push packages the full optimized Release configuration.
-          python3 - <<'PY'
-          from pathlib import Path
-          project = Path("iosApp/iosApp.xcodeproj/project.pbxproj").read_text()
-          if project.count("PRODUCT_BUNDLE_IDENTIFIER = com.nuvio.media;") != 2:
-              raise SystemExit("::error::Debug/Release application identity mismatch")
-          if project.count("PRODUCT_BUNDLE_IDENTIFIER = com.nuvio.media.DownloadsWidgetExtension;") != 2:
-              raise SystemExit("::error::Debug/Release widget identity mismatch")
-          PY
-          echo "REWATCH_IOS_TESTS=180_PASSED_IN_PRIOR_RUN_43534230190"
-          echo "CURRENT_SOURCE_TREE=IDENTICAL_TO_TESTED_CODE"
-          echo "BUILD_CONFIGURATION=$IOS_CONFIGURATION"
+          # Fresh simulator validation is required: the dispatch adapter changed.
+          ./gradlew :composeApp:iosSimulatorArm64Test \
+            --tests '*Rewatch*' \
+            -Pnuvio.ios.distribution=full \
+            -Dorg.gradle.jvmargs="-Xmx4608M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=768M" \
+            -Pkotlin.native.jvmArgs="-Xmx4608M" \
+            --console=plain
 
       - name: Validate rewatch-specific iOS simulator tests
         if: github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
@@ -185,14 +169,13 @@ jobs:
             echo "HEAD=$(git rev-parse --short HEAD)"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Record previously validated iPad test scope
+      - name: Record freshly validated iPad rewatch scope
         if: github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113'
         run: |
           {
-            echo "## Previously validated rewatch tests"
-            echo "The unchanged iPad source passed 180/180 iOS simulator rewatch tests."
-            echo "Passed run: https://github.com/mistertomlinson/NuvioMobile/actions/runs/43534230190"
-            echo "Current job skips recompiling simulator tests so Release packaging gets the full 330-minute window."
+            echo "## iPad replay sync adapter validation"
+            echo "Fresh iOS simulator rewatch tests passed on this exact source."
+            echo "Includes a regression test that verifies manual episode-selection intent reaches the outbound REPOSITION queue."
             echo "The optimized Release IPA retains the original app and widget bundle identifiers."
           } >> "$GITHUB_STEP_SUMMARY"
 

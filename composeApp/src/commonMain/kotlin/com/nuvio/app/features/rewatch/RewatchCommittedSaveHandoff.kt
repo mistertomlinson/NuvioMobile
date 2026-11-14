@@ -82,6 +82,34 @@ internal suspend fun notifyCommittedRewatchSave(
     }
 }
 
+/**
+ * Preserve verified manual-selection intent when dispatching an already
+ * committed local replay to a durable outbox and an asynchronous upload.
+ * The adapter never performs network work itself. Ordinary saves still
+ * carry manualRepositionApproved=false.
+ */
+internal class RewatchDispatchingCommittedSaveSink(
+    private val durableSink: RewatchCommittedSaveSink,
+    private val scheduleUpload: (profileId: Int, after: RewatchSession) -> Unit
+) : RewatchCommittedSaveSink {
+    override suspend fun committed(
+        profileId: Int, before: RewatchSession?, after: RewatchSession
+    ) = committedWithIntent(profileId, before, after, false)
+
+    override suspend fun committedWithIntent(
+        profileId: Int,
+        before: RewatchSession?,
+        after: RewatchSession,
+        manualRepositionApproved: Boolean
+    ) {
+        // Do not downgrade a manual jump to a regular save here.
+        durableSink.committedWithIntent(
+            profileId, before, after, manualRepositionApproved
+        )
+        scheduleUpload(profileId, after)
+    }
+}
+
 /** Non-secret binding from a verified Simkl account and existing Nuvio device. */
 internal data class RewatchCommitIdentity(
     val profileId: Int,

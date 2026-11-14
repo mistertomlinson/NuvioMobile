@@ -26,9 +26,11 @@ class RewatchCommittedEventPlannerTest {
     private fun plan(
         before: RewatchSession?,
         after: RewatchSession,
-        checkpoint: RewatchRemoteCheckpoint
+        checkpoint: RewatchRemoteCheckpoint,
+        manualRepositionApproved: Boolean = false
     ): RewatchQueuedEvent? = planCommittedRewatchEvent(
-        before, after, checkpoint, "event-id-1", device
+        before, after, checkpoint, "event-id-1", device,
+        manualRepositionApproved = manualRepositionApproved
     )
     private fun data(value: RewatchQueuedEvent) =
         Json.parseToJsonElement(value.payload).jsonObject
@@ -102,7 +104,8 @@ class RewatchCommittedEventPlannerTest {
                 updatedAtEpochMs = 400
             )
             val planned = requireNotNull(plan(original, moved,
-                RewatchRemoteCheckpoint.Synced(11, original.sessionId)))
+                RewatchRemoteCheckpoint.Synced(11, original.sessionId),
+                manualRepositionApproved = true))
             val body = data(planned)
             assertEquals("REPOSITION", body["type"]?.jsonPrimitive?.content)
             assertEquals("11", body["expectedRevision"]?.toString())
@@ -120,10 +123,12 @@ class RewatchCommittedEventPlannerTest {
             positionMs = 391_000L,
             durationMs = 0L,
             lastCompletedEpisode = null,
-            phase = RewatchPhase.PLAYING
+            phase = RewatchPhase.PLAYING,
+            updatedAtEpochMs = 400
         )
         val queued = requireNotNull(plan(original, moved,
-            RewatchRemoteCheckpoint.Synced(17, original.sessionId)))
+            RewatchRemoteCheckpoint.Synced(17, original.sessionId),
+            manualRepositionApproved = true))
         val payload = data(queued)
         assertEquals("REPOSITION", payload["type"]?.jsonPrimitive?.content)
         assertEquals("391000", payload["positionMs"]?.toString())
@@ -144,8 +149,17 @@ class RewatchCommittedEventPlannerTest {
         assertEquals("COMPLETE_EPISODE", data(completion)["type"]?.jsonPrimitive?.content)
         assertNull(plan(original, original.copy(
             episode = s3e6, phase = RewatchPhase.PLAYING,
-            positionMs = 3_000, lastCompletedEpisode = null
+            positionMs = 3_000, lastCompletedEpisode = null,
+            updatedAtEpochMs = 400
         ), RewatchRemoteCheckpoint.Synced(7, original.sessionId)))
+        // Even an accidentally reused marker cannot turn real duration
+        // measurements into a synthetic manual episode switch.
+        assertNull(plan(original, original.copy(
+            episode = s3e6, phase = RewatchPhase.PLAYING,
+            positionMs = 3_000, durationMs = 600_000,
+            lastCompletedEpisode = null, updatedAtEpochMs = 400
+        ), RewatchRemoteCheckpoint.Synced(7, original.sessionId),
+            manualRepositionApproved = true))
     }
 
     @Test

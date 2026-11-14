@@ -6,6 +6,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.intOrNull
 
 /**
  * Durable transport-agnostic replay write queue. No Simkl watched-history
@@ -98,7 +101,10 @@ internal data class RewatchOutboxEnvelope(
     val pending: List<RewatchQueuedEvent> = emptyList(),
     // Retained even after the last event is acknowledged; survives restart.
     val acknowledged: Map<String, RewatchAcknowledgedCheckpoint> = emptyMap(),
-    val clean: Map<String, RewatchCleanCursor> = emptyMap()
+    val clean: Map<String, RewatchCleanCursor> = emptyMap(),
+    // Never destroy old offline replay events during an explicit recovery.
+    // Superseded events stay available locally for audit or manual restore.
+    val recoveryArchive: List<RewatchQueuedEvent> = emptyList()
 )
 
 internal interface RewatchOutboxStorage {
@@ -178,6 +184,10 @@ internal class RewatchSyncOutbox(
         }
         require(value.pending.all { validEvent(it, deviceId) }) {
             "Corrupted replay outbox"
+        }
+        require(value.recoveryArchive.size <= 1000 &&
+            value.recoveryArchive.all { validEvent(it, deviceId) }) {
+            "Corrupted replay recovery archive"
         }
         require(value.pending.map { it.eventId }.distinct().size == value.pending.size) {
             "Duplicate replay event IDs"
@@ -284,6 +294,147 @@ internal class RewatchSyncOutbox(
         storage.write(profileId, json.encodeToString(
             old.copy(pending = old.pending + planned)
         ))
+        true
+    }
+
+
+    /**
+     * Recover a known server-rejected PROGRESS only after a *new*, verified
+     * manual episode-picker selection. Never infer manual intent from the
+     * rejected event itself, another device, autoplay, or a guessed server
+     * revision. The caller must have just observed INVALID_PROGRESS.
+     *
+     * On a fresh authenticated VPS GET, verify the original replay session
+     * and revision. An incompatible queue chain is never dropped: its exact
+     * events are moved into the same durable outbox's recoveryArchive in one
+     * write, while a new REPOSITION (+ optional latest PROGRESS) is staged.
+     *
+     * This function performs no network requests or Simkl mutations.
+     */
+    suspend fun recoverExplicitManualSelection(
+        profileId: Int,
+        simklAccountId: String,
+        deviceId: String,
+        manualBefore: RewatchSession,
+        manualAfter: RewatchSession,
+        latestLocal: RewatchSession,
+        lookup: RewatchRemoteLookup,
+        repositionEventId: String,
+        progressEventId: String,
+        localUnchanged: suspend () -> Boolean
+    ): Boolean = mutex.withLock {
+        if (!stillCurrent(profileId, simklAccountId, deviceId) ||
+            !localUnchanged() ||
+            manualBefore.ownerKey != "local-profile:$profileId" ||
+            manualAfter.ownerKey != manualBefore.ownerKey ||
+            latestLocal.ownerKey != manualAfter.ownerKey ||
+            manualBefore.sessionId != manualAfter.sessionId ||
+            latestLocal.sessionId != manualAfter.sessionId ||
+            manualBefore.episode == manualAfter.episode ||
+            manualAfter.updatedAtEpochMs <= manualBefore.updatedAtEpochMs ||
+            latestLocal.updatedAtEpochMs < manualAfter.updatedAtEpochMs ||
+            manualAfter.phase != RewatchPhase.PLAYING ||
+            latestLocal.phase != RewatchPhase.PLAYING ||
+            manualAfter.durationMs != 0L ||
+            manualAfter.lastCompletedEpisode != null ||
+            latestLocal.lastCompletedEpisode != null ||
+            latestLocal.episode != manualAfter.episode ||
+            !seriesKey(manualAfter.canonicalSeriesId)
+                .equals(seriesKey(manualBefore.canonicalSeriesId)) ||
+            !seriesKey(latestLocal.canonicalSeriesId)
+                .equals(seriesKey(manualAfter.canonicalSeriesId)) ||
+            repositionEventId.isBlank() || progressEventId.isBlank() ||
+            repositionEventId == progressEventId) return@withLock false
+
+        val verified = lookup as? RewatchRemoteLookup.Verified
+            ?: return@withLock false
+        val checkpoint = verified.checkpoint as? RewatchRemoteCheckpoint.Synced
+            ?: return@withLock false
+        val remote = verified.remoteSession ?: return@withLock false
+        val key = seriesKey(manualAfter.canonicalSeriesId)
+        if (remote.ownerKey != manualAfter.ownerKey ||
+            seriesKey(remote.canonicalSeriesId) != key ||
+            remote.sessionId != checkpoint.sessionId ||
+            checkpoint.sessionId != manualAfter.sessionId ||
+            remote.episode == manualAfter.episode ||
+            remote.phase == RewatchPhase.FINISHED) return@withLock false
+
+        val old = readChecked(profileId, simklAccountId, deviceId)
+        val pending = old.pending.filter {
+            seriesKey(it.canonicalSeriesId) == key
+        }
+        if (pending.isEmpty() ||
+            old.recoveryArchive.size + pending.size > 1000 ||
+            old.recoveryArchive.any {
+                it.eventId == repositionEventId || it.eventId == progressEventId
+            } || old.pending.any {
+                it.eventId == repositionEventId || it.eventId == progressEventId
+            }) return@withLock false
+
+        // A known invalid-progress head is the only eligible repair target.
+        // The server's original episode MUST differ from that event's
+        // episode; other invalid_progress causes are not auto-recoverable.
+        fun payload(event: RewatchQueuedEvent) = runCatching {
+            json.parseToJsonElement(event.payload).jsonObject
+        }.getOrNull()
+        val firstPayload = payload(pending.first()) ?: return@withLock false
+        val firstEpisode = firstPayload["episode"]?.jsonObject
+        if (firstPayload["type"]?.jsonPrimitive?.content != "PROGRESS" ||
+            firstEpisode?.get("season")?.jsonPrimitive?.intOrNull == remote.episode.season &&
+            firstEpisode["episode"]?.jsonPrimitive?.intOrNull == remote.episode.episode) {
+            return@withLock false
+        }
+        if (firstEpisode?.get("season")?.jsonPrimitive?.intOrNull == null ||
+            firstEpisode["episode"]?.jsonPrimitive?.intOrNull == null)
+            return@withLock false
+
+        if (pending.first().expectedRevision != checkpoint.revision ||
+            pending.withIndex().any { (index, event) ->
+                val type = payload(event)?.get("type")?.jsonPrimitive?.content
+                event.sessionId != checkpoint.sessionId ||
+                    event.deviceId != deviceId ||
+                    event.expectedRevision != checkpoint.revision + index ||
+                    type !in setOf("PROGRESS", "REPOSITION")
+            }) return@withLock false
+        val ack = old.acknowledged[key]
+        if (ack != null && (ack.sessionId != checkpoint.sessionId ||
+            ack.revision > checkpoint.revision)) return@withLock false
+
+        val reposition = planCommittedRewatchEvent(
+            before = remote,
+            after = manualAfter,
+            checkpoint = checkpoint,
+            eventId = repositionEventId,
+            deviceId = deviceId,
+            manualRepositionApproved = true
+        ) ?: return@withLock false
+
+        val progress = planCommittedRewatchEvent(
+            before = manualAfter,
+            after = latestLocal,
+            checkpoint = RewatchRemoteCheckpoint.Synced(
+                checkpoint.revision + 1, checkpoint.sessionId
+            ),
+            eventId = progressEventId,
+            deviceId = deviceId
+        )?.takeIf {
+            payload(it)?.get("type")?.jsonPrimitive?.content == "PROGRESS"
+        }
+        // If local progress changed after the manual click, its latest
+        // position must be carried forward, not lost when archiving.
+        if ((manualAfter.positionMs != latestLocal.positionMs ||
+            manualAfter.durationMs != latestLocal.durationMs) &&
+            progress == null) return@withLock false
+
+        if (!stillCurrent(profileId, simklAccountId, deviceId) ||
+            !localUnchanged()) return@withLock false
+        storage.write(profileId, json.encodeToString(old.copy(
+            pending = old.pending.filterNot {
+                seriesKey(it.canonicalSeriesId) == key
+            } + listOfNotNull(reposition, progress),
+            recoveryArchive = old.recoveryArchive + pending,
+            clean = old.clean - key
+        )))
         true
     }
 

@@ -20,11 +20,6 @@ on:
           - Debug
           - Release
         default: Release
-      validation_only:
-        description: Run focused iPad replay tests without building an IPA
-        required: true
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -194,7 +189,7 @@ jobs:
           echo 'REWATCH_IPAD_SYNC=ENABLED_IN_ISOLATED_TEST_BRANCH'
 
       - name: Record test-only completion
-        if: inputs.validation_only == true
+        if: github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114'
         run: |
           {
             echo "## Test-only iPad replay validation"
@@ -206,7 +201,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Refuse incomplete full-release runtime configuration
-        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && inputs.validation_only != true
+        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && github.ref != 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114'
         shell: bash
         run: |
           python3 - <<'PY'
@@ -244,7 +239,7 @@ jobs:
           PY
 
       - name: Build unsigned full ${{ inputs.configuration }} IPA
-        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && inputs.validation_only != true
+        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && github.ref != 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114'
         run: |
           (
             while sleep 60; do
@@ -260,7 +255,7 @@ jobs:
           ./scripts/build-ios-ipa.sh
 
       - name: Summarize IPA
-        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && inputs.validation_only != true
+        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && github.ref != 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114'
         run: |
           configuration_slug="$(printf '%s' "${IOS_CONFIGURATION}" | tr '[:upper:]' '[:lower:]')"
           ipa_path="$(find build/ios-ipa -maxdepth 1 -type f -name "*-full-${configuration_slug}.ipa" -print -quit)"
@@ -281,7 +276,7 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload test IPA
-        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && inputs.validation_only != true
+        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && github.ref != 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114'
         uses: actions/upload-artifact@v7
         with:
           name: nuvio-test-${{ inputs.configuration }}-ipa-${{ github.sha }}

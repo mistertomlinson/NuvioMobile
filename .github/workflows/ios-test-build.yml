@@ -32,7 +32,7 @@ jobs:
   build:
     name: iPad rewatch validation / unsigned IPA build
     runs-on: xcode-27
-    timeout-minutes: ${{ (github.ref == 'refs/heads/test/rewatch-public-https-20261112' || (github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113' || github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114')) && 330 || (github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && 75 || (inputs.configuration == 'Release' && 75 || 30)) }}
+    timeout-minutes: ${{ github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114' && 90 || (github.ref == 'refs/heads/test/rewatch-public-https-20261112' || (github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113' || github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114')) && 330 || (github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && 75 || (inputs.configuration == 'Release' && 75 || 30)) }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
       GRADLE_OPTS: -Dfile.encoding=UTF-8

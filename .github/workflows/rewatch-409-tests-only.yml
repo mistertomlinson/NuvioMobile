@@ -1,0 +1,87 @@
+name: Validate Rewatch 409 Recovery (Tests Only)
+
+# Intentionally manual. Never build an IPA or start automatically on push.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rewatch-409-tests-only-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Focused iOS simulator rewatch recovery tests
+    if: github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114'
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+      GRADLE_OPTS: -Dfile.encoding=UTF-8
+      KOTLIN_DAEMON_JVMARGS: -Xmx2048M
+      NUVIO_GRADLE_JVMARGS: -Xmx4608M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=768M
+      NUVIO_KOTLIN_NATIVE_JVMARGS: -Xmx4608M
+      RELEASE_PROPERTIES_BASE64: ${{ secrets.NUVIO_LOCAL_PROPERTIES_BASE64 }}
+
+    steps:
+      - name: Check out recovery branch
+        uses: actions/checkout@v6
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: true
+
+      - name: Cache Kotlin Native
+        uses: actions/cache@v5
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: |
+            konan-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Prepare test-only configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${RELEASE_PROPERTIES_BASE64}" ]]; then
+            printf '%s' "${RELEASE_PROPERTIES_BASE64}" | base64 --decode > local.properties
+            sed -i '' -E '/^[[:space:]]*(sdk\\.dir|NUVIO_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
+          else
+            : > local.properties
+          fi
+
+      - name: Prepare iOS dependencies
+        run: ./scripts/prepare-ios-dependencies.sh
+
+      - name: Run focused 409 recovery and transport regressions
+        run: |
+          ./gradlew :composeApp:iosSimulatorArm64Test \
+            --tests '*RewatchConflictRecoveryTest*' \
+            --tests '*RewatchVpsApiTest*' \
+            --tests '*RewatchCommittedSaveHandoffTest*' \
+            --tests '*RewatchSyncOutboxTest*' \
+            --tests '*RewatchForegroundSynchronizerTest*' \
+            --tests '*RewatchTransportCoordinatorTest*' \
+            -Pnuvio.ios.distribution=full \
+            -Dorg.gradle.jvmargs="-Xmx4608M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=768M" \
+            -Pkotlin.native.jvmArgs="-Xmx4608M" \
+            --console=plain
+
+      - name: Summarize result
+        run: |
+          {
+            echo "## Replay 409 recovery validation"
+            echo "Focused simulator tests: PASSED"
+            echo "No IPA was built."
+            echo "No changes to Simkl history, VPS, or installed apps."
+            echo "HEAD=$(git rev-parse --short HEAD)"
+          } >> "$GITHUB_STEP_SUMMARY"

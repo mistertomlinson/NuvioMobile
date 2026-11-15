@@ -54,7 +54,7 @@ jobs:
           set -euo pipefail
           if [[ -n "${RELEASE_PROPERTIES_BASE64}" ]]; then
             printf '%s' "${RELEASE_PROPERTIES_BASE64}" | base64 --decode > local.properties
-            sed -i '' -E '/^[[:space:]]*(sdk\\.dir|NUVIO_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
+            sed -i '' -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_STORE_FILE)[[:space:]]*=/d' local.properties
           else
             : > local.properties
           fi

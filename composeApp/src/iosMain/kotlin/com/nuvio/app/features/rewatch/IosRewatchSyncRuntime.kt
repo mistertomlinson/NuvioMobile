@@ -111,8 +111,14 @@ internal object IosRewatchSyncRuntime {
                 syncScope.launch {
                     try {
                         var drain = uploadPending()
-                        if (drain == RewatchOutboxDrainResult.INVALID_PROGRESS &&
-                            approvedManualSelection && before != null) {
+                        if (drain in setOf(
+                                RewatchOutboxDrainResult.INVALID_PROGRESS,
+                                RewatchOutboxDrainResult.CONFLICT
+                            ) && approvedManualSelection && before != null) {
+                            // A fresh, explicit click is the only permission to
+                            // rebase old offline events after another device
+                            // advanced the VPS. The outbox validates/archives
+                            // the old chain; no background or autoplay repair.
                             val identity = ensureOnlineIdentity()
                             if (identity != null && identity.profileId == profileId) {
                                 val series = after.canonicalSeriesId

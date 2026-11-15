@@ -32,7 +32,7 @@ jobs:
   build:
     name: iPad rewatch validation / unsigned IPA build
     runs-on: xcode-27
-    timeout-minutes: ${{ github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114' && 90 || (github.ref == 'refs/heads/test/rewatch-public-https-20261112' || (github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113' || github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114')) && 330 || (github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && 75 || (inputs.configuration == 'Release' && 75 || 30)) }}
+    timeout-minutes: ${{ github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114' && 345 || (github.ref == 'refs/heads/test/rewatch-public-https-20261112' || (github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113' || github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114')) && 330 || (github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && 75 || (inputs.configuration == 'Release' && 75 || 30)) }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
       GRADLE_OPTS: -Dfile.encoding=UTF-8
@@ -132,9 +132,10 @@ jobs:
         run: ./scripts/prepare-ios-dependencies.sh
 
       - name: Validate iPad upload intent regression in simulator
-        if: (github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113' || github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114')
+        if: github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113'
         run: |
-          # Fresh simulator validation is required: the dispatch adapter changed.
+          # Recovery branch was tested separately on commit 8192e834a84b;
+          # this packaging run intentionally avoids the expensive simulator relink.
           ./gradlew :composeApp:iosSimulatorArm64Test \
             --tests '*Rewatch*' \
             -Pnuvio.ios.distribution=full \
@@ -170,7 +171,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record freshly validated iPad rewatch scope
-        if: (github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113' || github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114')
+        if: github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113'
         run: |
           {
             echo "## iPad replay sync adapter validation"
@@ -188,20 +189,32 @@ jobs:
           grep -q 'isolatedIpadDeviceTestEnablesReplayOnlySyncButDoesNotAutoInstallSink' composeApp/src/commonTest/kotlin/com/nuvio/app/features/rewatch/RewatchCommittedSaveHandoffTest.kt
           echo 'REWATCH_IPAD_SYNC=ENABLED_IN_ISOLATED_TEST_BRANCH'
 
-      - name: Record test-only completion
+      - name: Verify successful simulator-tested source and Release packaging
         if: github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114'
+        shell: bash
         run: |
+          set -euo pipefail
+          test "${IOS_CONFIGURATION}" = Release
+          # Git tree/blob IDs from successful, independently verified
+          # simulator run 43656739169 (source commit 8192e834a84b).
+          test "$(git rev-parse 'HEAD:composeApp/src')" = ef1fe3a4f9dcd0469054cf48f82fe5215bd7b97e
+          test "$(git rev-parse 'HEAD:composeApp/build.gradle.kts')" = 69d1e2ff108c7a8ea3f5fbaffc048b530f63a030
+          test "$(git rev-parse 'HEAD:scripts/build-ios-ipa.sh')" = e41413e2cfc1d4be286048b13ee7dc058e706677
+          test "$(git rev-parse 'HEAD:scripts/prepare-ios-dependencies.sh')" = a842c7f73ed48fc09f264498a1c87e6563cb5fe9
+          test "$(git rev-parse 'HEAD:iosApp/iosApp.xcodeproj')" = 0a07c949af390ce44f73e7a0cd04d33006ff4ed2
+          test "$(git rev-parse 'HEAD:iosApp/Configuration/Version.xcconfig')" = 022cc36173b5db8b9803b9fdfe094eeada63b4ac
           {
-            echo "## Test-only iPad replay validation"
-            echo "Focused iOS simulator replay tests passed."
-            echo "IPA_BUILD=SKIPPED"
-            echo "VPS=UNTOUCHED"
-            echo "INSTALLED_APPS=UNTOUCHED"
-            echo "HEAD=$(git rev-parse --short HEAD)"
+            echo "## Rewatch 409 recovery IPA"
+            echo "Simulator validation: successful run 43656739169."
+            echo "Validated source tree unchanged from 8192e834a84b."
+            echo "Release build only; no duplicate simulator linking."
+            echo "GitHub branch: ${GITHUB_REF_NAME}"
           } >> "$GITHUB_STEP_SUMMARY"
+          echo 'RECOVERY_VALIDATED_SOURCE=PASS'
+          echo 'RECOVERY_RELEASE_CONFIGURATION=PASS'
 
       - name: Refuse incomplete full-release runtime configuration
-        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && github.ref != 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114'
+        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
         shell: bash
         run: |
           python3 - <<'PY'
@@ -239,7 +252,7 @@ jobs:
           PY
 
       - name: Build unsigned full ${{ inputs.configuration }} IPA
-        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && github.ref != 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114'
+        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
         run: |
           (
             while sleep 60; do
@@ -255,7 +268,7 @@ jobs:
           ./scripts/build-ios-ipa.sh
 
       - name: Summarize IPA
-        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && github.ref != 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114'
+        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
         run: |
           configuration_slug="$(printf '%s' "${IOS_CONFIGURATION}" | tr '[:upper:]' '[:lower:]')"
           ipa_path="$(find build/ios-ipa -maxdepth 1 -type f -name "*-full-${configuration_slug}.ipa" -print -quit)"
@@ -276,7 +289,7 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload test IPA
-        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && github.ref != 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114'
+        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
         uses: actions/upload-artifact@v7
         with:
           name: nuvio-test-${{ inputs.configuration }}-ipa-${{ github.sha }}

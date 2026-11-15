@@ -302,7 +302,8 @@ internal class RewatchSyncOutbox(
      * Recover a known server-rejected PROGRESS only after a *new*, verified
      * manual episode-picker selection. Never infer manual intent from the
      * rejected event itself, another device, autoplay, or a guessed server
-     * revision. The caller must have just observed INVALID_PROGRESS.
+     * revision. The caller must have just observed a verified HTTP 409
+     * (INVALID_PROGRESS or CONFLICT), not an unrelated network failure.
      *
      * On a fresh authenticated VPS GET, verify the original replay session
      * and revision. An incompatible queue chain is never dropped: its exact
@@ -393,17 +394,24 @@ internal class RewatchSyncOutbox(
             firstEpisode?.get("episode")?.jsonPrimitive?.intOrNull == null)
             return@withLock false
 
-        if (pending.first().expectedRevision != checkpoint.revision ||
+        // The rejected client queue may be anchored to an older VPS
+        // revision because another device legitimately advanced the same
+        // session. Verify the ORIGINAL contiguous local chain separately,
+        // then base the replacement event on the latest authenticated GET.
+        // A future-revision queue must never be silently discarded.
+        val queuedRevision = pending.first().expectedRevision
+        if (queuedRevision < 1L || queuedRevision > checkpoint.revision ||
             pending.withIndex().any { (index, event) ->
                 val type = payload(event)?.get("type")?.jsonPrimitive?.content
                 event.sessionId != checkpoint.sessionId ||
                     event.deviceId != deviceId ||
-                    event.expectedRevision != checkpoint.revision + index ||
+                    event.expectedRevision != queuedRevision + index.toLong() ||
                     type !in setOf("PROGRESS", "REPOSITION")
             }) return@withLock false
         val ack = old.acknowledged[key]
         if (ack != null && (ack.sessionId != checkpoint.sessionId ||
-            ack.revision > checkpoint.revision)) return@withLock false
+            ack.revision > checkpoint.revision ||
+            ack.revision > queuedRevision)) return@withLock false
 
         val reposition = planCommittedRewatchEvent(
             before = remote,

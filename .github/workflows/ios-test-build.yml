@@ -20,6 +20,11 @@ on:
           - Debug
           - Release
         default: Release
+      validation_only:
+        description: Run focused iPad replay tests without building an IPA
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -30,7 +35,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build unsigned full ${{ inputs.configuration || 'Release' }} IPA
+    name: iPad rewatch validation / unsigned IPA build
     runs-on: xcode-27
     timeout-minutes: ${{ (github.ref == 'refs/heads/test/rewatch-public-https-20261112' || (github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113' || github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114')) && 330 || (github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && 75 || (inputs.configuration == 'Release' && 75 || 30)) }}
     env:
@@ -188,8 +193,20 @@ jobs:
           grep -q 'isolatedIpadDeviceTestEnablesReplayOnlySyncButDoesNotAutoInstallSink' composeApp/src/commonTest/kotlin/com/nuvio/app/features/rewatch/RewatchCommittedSaveHandoffTest.kt
           echo 'REWATCH_IPAD_SYNC=ENABLED_IN_ISOLATED_TEST_BRANCH'
 
+      - name: Record test-only completion
+        if: inputs.validation_only == true
+        run: |
+          {
+            echo "## Test-only iPad replay validation"
+            echo "Focused iOS simulator replay tests passed."
+            echo "IPA_BUILD=SKIPPED"
+            echo "VPS=UNTOUCHED"
+            echo "INSTALLED_APPS=UNTOUCHED"
+            echo "HEAD=$(git rev-parse --short HEAD)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Refuse incomplete full-release runtime configuration
-        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
+        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && inputs.validation_only != true
         shell: bash
         run: |
           python3 - <<'PY'
@@ -227,7 +244,7 @@ jobs:
           PY
 
       - name: Build unsigned full ${{ inputs.configuration }} IPA
-        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
+        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && inputs.validation_only != true
         run: |
           (
             while sleep 60; do
@@ -243,7 +260,7 @@ jobs:
           ./scripts/build-ios-ipa.sh
 
       - name: Summarize IPA
-        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
+        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && inputs.validation_only != true
         run: |
           configuration_slug="$(printf '%s' "${IOS_CONFIGURATION}" | tr '[:upper:]' '[:lower:]')"
           ipa_path="$(find build/ios-ipa -maxdepth 1 -type f -name "*-full-${configuration_slug}.ipa" -print -quit)"
@@ -264,7 +281,7 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload test IPA
-        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7'
+        if: github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && inputs.validation_only != true
         uses: actions/upload-artifact@v7
         with:
           name: nuvio-test-${{ inputs.configuration }}-ipa-${{ github.sha }}

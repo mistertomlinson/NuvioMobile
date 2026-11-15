@@ -1,0 +1,88 @@
+package PACKAGE_NAME
+
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+
+private class AuditDisk : RewatchOutboxStorage {
+    var saved: String? = null
+    override suspend fun read(profileId: Int) = saved
+    override suspend fun write(profileId: Int, payload: String) { saved = payload }
+}
+
+fun main(args: Array<String>) = runBlocking {
+    val origin = args[0]
+    check(URI(origin).host == "127.0.0.1")
+    val mode = args[1]
+    val device = args[2]
+    val token = args[3].repeat(64)
+    val profile = 2
+    val account = "12003"
+    val series = "tt0386676"
+    val credential = ReplayBootstrapCredential(account, token, device, Long.MAX_VALUE)
+    val http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build()
+    // The production API still enforces its HTTPS origin. ONLY this test
+    // exchange redirects its transport to the private loopback fixture.
+    val api = RewatchVpsApi(RewatchHttpExchange { method, url, headers, body ->
+        check(URI(url).host == "nuviorewatch.duckdns.org")
+        val request = HttpRequest.newBuilder(URI(origin + URI(url).rawPath))
+        headers.forEach { (name, value) -> request.header(name, value) }
+        request.method(method, if (body.isEmpty()) HttpRequest.BodyPublishers.noBody()
+            else HttpRequest.BodyPublishers.ofString(body))
+        val response = http.send(request.build(), HttpResponse.BodyHandlers.ofString())
+        RewatchHttpResponse(response.statusCode(), response.body())
+    })
+    suspend fun lookup(): RewatchRemoteLookup.Verified {
+        val response = api.list(credential) as RewatchVpsReadResult.Received
+        return readVerifiedRewatchCheckpoint(response.json, series, "local-profile:2")
+            as RewatchRemoteLookup.Verified
+    }
+    val remote = lookup()
+    val snapshot = requireNotNull(remote.remoteSession)
+    if (mode == "pull") {
+        check(snapshot.episode == RewatchEpisode(5, args[4].toInt()))
+        check(snapshot.positionMs == args[5].toLong())
+        println("OTHER_DEVICE_READ=S${snapshot.episode.season}E${snapshot.episode.episode} POSITION=${snapshot.positionMs}")
+        return@runBlocking
+    }
+    val disk = AuditDisk()
+    val queue = RewatchSyncOutbox(disk) { p, a, d -> p == profile && a == account && d == device }
+    val headType = args[4]
+    val selected = args[5].toInt()
+    val before = snapshot.copy(
+        episode = RewatchEpisode(5, 19), phase = RewatchPhase.PLAYING,
+        positionMs = 23000, durationMs = 1300000,
+        lastCompletedEpisode = null, updatedAtEpochMs = 100
+    )
+    val after = before.copy(episode = RewatchEpisode(5, selected), positionMs = 0,
+        durationMs = 0, updatedAtEpochMs = 200)
+    val latest = after.copy(positionMs = 23000, durationMs = 1300000, updatedAtEpochMs = 300)
+    val progressFields = if (headType == "PROGRESS") ",\"positionMs\":12000,\"durationMs\":1300000" else ""
+    val payload = """{"eventId":"stale-$device","deviceId":"$device","canonicalSeriesId":"$series","sessionId":"${snapshot.sessionId}","expectedRevision":1,"type":"$headType","episode":{"season":5,"episode":19}$progressFields}"""
+    val original = RewatchQueuedEvent("stale-$device", device, series, snapshot.sessionId, 1L, payload)
+    check(queue.enqueue(profile, account, device, original))
+    check(queue.drain(profile, account, device) { api.submit(credential, it) } == RewatchOutboxDrainResult.CONFLICT)
+    check(queue.recoverExplicitManualSelection(
+        profile, account, device, before, after, latest, lookup(),
+        "reposition-$device", "progress-$device", { true }
+    ))
+    // Simulate a new player save racing the asynchronous upload. This must
+    // append at the repaired anchor, rather than being lost against rev 1.
+    check(queue.enqueueCommittedTransition(profile, account, device, latest,
+        latest.copy(positionMs = 34000, updatedAtEpochMs = 400),
+        RewatchRemoteCheckpoint.Unknown, "next-progress-$device"))
+    check(queue.drain(profile, account, device) { api.submit(credential, it) } == RewatchOutboxDrainResult.DRAINED)
+    val saved = Json.decodeFromString<RewatchOutboxEnvelope>(requireNotNull(disk.saved))
+    check(saved.recoveryArchive == listOf(original))
+    val observed = lookup()
+    check(observed.remoteSession?.episode == after.episode)
+    check(observed.remoteSession?.positionMs == 34000L)
+    check(saved.pending.isEmpty())
+    check(queue.recordVerifiedCleanBaseline(profile, account, device,
+        latest.copy(positionMs = 34000, updatedAtEpochMs = 400), observed))
+    println("RECOVERED_HEAD=$headType EPISODE=S5E$selected POSITION=34000 ARCHIVE=EXACT QUEUE=EMPTY CLEAN_BASELINE=VERIFIED")
+}

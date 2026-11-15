@@ -134,12 +134,66 @@ class RewatchConflictRecoveryTest {
         }
 
     @Test
-    fun rejectedHeadForSameEpisodeIsNotTreatedAsManualJump() = runBlocking {
+    fun staleProgressForServersCurrentEpisodeCanBeSupersededByFreshManualJump() = runBlocking {
         val storage = MemoryStorage()
         val queue = queue(storage)
         queue.enqueue(profile, account, device, legacy(episode = 6))
+        assertTrue(recover(queue))
+        assertEquals(listOf("blocked-progress"),
+            storage.saved().recoveryArchive.map { it.eventId })
+    }
+
+    @Test
+    fun staleRepositionHeadCanBeSupersededAndEveryOriginalPayloadSurvivesRestart() = runBlocking {
+        val storage = MemoryStorage()
+        val queue = queue(storage)
+        queue.enqueue(profile, account, device, legacy(type = "REPOSITION"))
+        queue.enqueue(profile, account, device, legacy("later-progress", "PROGRESS", 2))
+        val originals = storage.saved().pending
+        assertTrue(recover(queue, verified = lookup(revision = 666)))
+        assertEquals(originals, storage.saved().recoveryArchive)
+        assertEquals(2, queue(storage).pendingCount(profile, account, device))
+        assertEquals(originals, storage.saved().recoveryArchive)
+    }
+
+    @Test
+    fun progressSavedAfterRebaseBeforeUploadUsesTheNewRevisionAnchor() = runBlocking {
+        val storage = MemoryStorage()
+        val queue = queue(storage)
+        queue.enqueue(profile, account, device, legacy())
+        assertTrue(recover(queue, verified = lookup(revision = 666)))
+        assertTrue(queue.enqueueCommittedTransition(
+            profile, account, device, latest,
+            latest.copy(positionMs = 34000, updatedAtEpochMs = 400),
+            RewatchRemoteCheckpoint.Unknown, "progress-during-upload"
+        ))
+        assertEquals(listOf(666L, 667L, 668L),
+            storage.saved().pending.map { it.expectedRevision })
+        assertEquals(RewatchOutboxDrainResult.DRAINED,
+            queue.drain(profile, account, device) {
+                RewatchOutboxSubmitResult.Accepted(it.expectedRevision + 1L)
+            })
+        assertEquals(669L, storage.saved().acknowledged.getValue(series).revision)
+    }
+
+    @Test
+    fun freshManualSelectionCanPublishAfterCheckpointLoadingPreventedEnqueue() = runBlocking {
+        val storage = MemoryStorage()
+        val queue = queue(storage)
+        assertTrue(recover(queue, verified = lookup(revision = 666)))
+        assertTrue(storage.saved().recoveryArchive.isEmpty())
+        assertEquals(listOf(666L, 667L), storage.saved().pending.map { it.expectedRevision })
+    }
+
+    @Test
+    fun payloadIdentityMismatchCannotBeHiddenByArchivingItsEnvelope() = runBlocking {
+        val storage = MemoryStorage()
+        val queue = queue(storage)
+        val event = legacy()
+        queue.enqueue(profile, account, device,
+            event.copy(payload = event.payload.replace(device, "another-device")))
         val original = storage.json
-        assertFalse(recover(queue))
+        assertFalse(recover(queue, verified = lookup(revision = 666)))
         assertEquals(original, storage.json)
     }
 
@@ -253,16 +307,31 @@ class RewatchConflictRecoveryTest {
     }
 
     @Test
-    fun mixedCompletionQueueMustNotLoseOfflineHistory() = runBlocking {
+    fun validatedCompletionCanBeArchivedWithoutLosingItsExactOfflineHistory() = runBlocking {
         val storage = MemoryStorage()
         val queue = queue(storage)
         queue.enqueue(profile, account, device, legacy())
-        queue.enqueue(profile, account, device,
-            legacy("offline-completion", "COMPLETE_EPISODE", 2))
-        val original = storage.json
-        assertFalse(recover(queue))
-        assertEquals(original, storage.json)
+        val completion = legacy("offline-completion", "COMPLETE_EPISODE", 2)
+        queue.enqueue(profile, account, device, completion.copy(payload =
+            completion.payload.trimEnd().dropLast(1) +
+                ",\"resultPhase\":\"NEXT_UP\",\"nextEpisode\":{\"season\":5,\"episode\":20}}"))
+        val original = storage.saved().pending
+        assertTrue(recover(queue))
+        assertEquals(original, storage.saved().recoveryArchive)
         assertEquals(2, queue.pendingCount(profile, account, device))
+    }
+
+    @Test
+    fun malformedCompletionAndStopCannotBeSilentlySuperseded() = runBlocking {
+        for (type in listOf("COMPLETE_EPISODE", "STOP")) {
+            val storage = MemoryStorage()
+            val queue = queue(storage)
+            queue.enqueue(profile, account, device, legacy())
+            queue.enqueue(profile, account, device, legacy("invalid-tail", type, 2))
+            val original = storage.json
+            assertFalse(recover(queue))
+            assertEquals(original, storage.json)
+        }
     }
 
     @Test

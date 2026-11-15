@@ -46,8 +46,12 @@ internal suspend fun resolveOrStartRewatchForPlayback(
         if (!explicitManualEpisodeSelection) return null
         if (!wasPreviouslyWatched()) return null
         if (activeProfileId() != expectedProfileId) return null
-        val now = nowEpochMs()
-        if (now <= recorded.updatedAtEpochMs) return null
+        val wallClock = nowEpochMs()
+        if (wallClock < 0L || recorded.updatedAtEpochMs >= Long.MAX_VALUE - 1L) return null
+        // This is a new, verified user action. A same-tick or adjusted local
+        // clock must not cancel it after a remote pull. VPS revisions decide
+        // cross-device order; this timestamp only orders local persistence.
+        val now = maxOf(wallClock, recorded.updatedAtEpochMs + 1L)
         val moved = recorded.copy(
             episode = episode,
             phase = RewatchPhase.PLAYING,

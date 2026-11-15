@@ -164,7 +164,7 @@ class RewatchPlayerSessionBootstrapTest {
     }
 
     @Test
-    fun explicitBackwardJumpRequiresWatchedProofAndFreshClock() = runTest {
+    fun explicitBackwardJumpRequiresWatchedProofButSurvivesSameClockTick() = runTest {
         val store = FakeStore()
         val existing = stored(RewatchPhase.PLAYING)
         store.sessions[profileId] = listOf(existing)
@@ -174,20 +174,30 @@ class RewatchPlayerSessionBootstrapTest {
             explicitManualSelection = true,
             watched = { false }
         ))
-        assertNull(bootstrap(store,
+        assertEquals(0, store.writes)
+        val moved = assertNotNull(bootstrap(store,
             requestedEpisode = earlier,
             explicitManualSelection = true,
             watched = { true },
             now = existing.updatedAtEpochMs
         ))
-        assertEquals(0, store.writes)
-        val moved = assertNotNull(bootstrap(store,
-            requestedEpisode = earlier,
-            explicitManualSelection = true,
-            watched = { true }
-        ))
         assertEquals(earlier, moved.episode)
         assertEquals(existing.sessionId, moved.sessionId)
+        assertEquals(existing.updatedAtEpochMs + 1L, moved.updatedAtEpochMs)
+    }
+
+    @Test
+    fun remoteMillisecondTimestampDoesNotRejectManualSelectionFromRoundedOrAdjustedClock() = runTest {
+        val store = FakeStore()
+        val existing = stored(RewatchPhase.PLAYING).copy(updatedAtEpochMs = 1543L)
+        store.sessions[profileId] = listOf(existing)
+        val moved = assertNotNull(bootstrap(store,
+            requestedEpisode = RewatchEpisode(5, 16),
+            explicitManualSelection = true,
+            now = 1000L
+        ))
+        assertEquals(RewatchEpisode(5, 16), moved.episode)
+        assertEquals(1544L, moved.updatedAtEpochMs)
     }
 
     @Test

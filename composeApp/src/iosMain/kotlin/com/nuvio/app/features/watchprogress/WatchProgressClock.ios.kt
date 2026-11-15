@@ -1,9 +1,8 @@
 package com.nuvio.app.features.watchprogress
 
-import kotlinx.cinterop.ExperimentalForeignApi
-import platform.posix.time
+import platform.Foundation.NSDate
+import platform.Foundation.timeIntervalSince1970
 
 actual object WatchProgressClock {
-    @OptIn(ExperimentalForeignApi::class)
-    actual fun nowEpochMs(): Long = time(null) * 1000L
+    actual fun nowEpochMs(): Long = (NSDate().timeIntervalSince1970 * 1_000.0).toLong()
 }

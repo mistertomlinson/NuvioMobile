@@ -111,7 +111,11 @@ internal object IosRewatchSyncRuntime {
                 syncScope.launch {
                     try {
                         var drain = uploadPending()
+                        if (approvedManualSelection) {
+                            println("RewatchVpsTest manual_replay_drain=" + drain.name)
+                        }
                         if (drain in setOf(
+                                RewatchOutboxDrainResult.EMPTY,
                                 RewatchOutboxDrainResult.INVALID_PROGRESS,
                                 RewatchOutboxDrainResult.CONFLICT
                             ) && approvedManualSelection && before != null) {
@@ -151,6 +155,8 @@ internal object IosRewatchSyncRuntime {
                                             }
                                         }
                                     )
+                                    println("RewatchVpsTest manual_recovery=" +
+                                        if (repaired) "STAGED" else "DECLINED")
                                     if (repaired) drain = uploadPending()
                                 }
                             }

@@ -144,17 +144,73 @@ class RewatchConflictRecoveryTest {
     }
 
     @Test
-    fun onlyAFreshMatchingRemoteRevisionMayReanchorOutbox() = runBlocking {
+    fun rejectedOldRevisionMayReanchorOnlyUsingFreshMatchingRemoteCheckpoint() = runBlocking {
         val storage = MemoryStorage()
         val queue = queue(storage)
         queue.enqueue(profile, account, device, legacy())
         val original = storage.json
-        assertFalse(recover(queue, verified = lookup(revision = 2)))
         assertFalse(recover(queue, verified = lookup(remote.copy(
             sessionId = "new-remote-session"
-        ))))
+        ), revision = 666)))
         assertFalse(recover(queue, verified = RewatchRemoteLookup.Invalid))
+        assertFalse(recover(queue, verified = lookup(session = selectedAfter, revision = 666)))
         assertEquals(original, storage.json)
+    }
+
+    @Test
+    fun revOneOutboxCanRecoverAgainstServerRevision666OnlyOnManualSelection() =
+        runBlocking {
+            val storage = MemoryStorage()
+            val queue = queue(storage)
+            assertTrue(queue.enqueue(profile, account, device, legacy()))
+            assertTrue(queue.enqueue(profile, account, device,
+                legacy("later-progress", "PROGRESS", 2, 19)))
+            // This is a proven S5E26 successor after S5E25 was completed
+            // by another authorized device while the iPad was offline.
+            val advancedRemote = remote.copy(
+                episode = RewatchEpisode(5, 26),
+                positionMs = 0,
+                durationMs = 0,
+                lastCompletedEpisode = RewatchEpisode(5, 25),
+                phase = RewatchPhase.NEXT_UP
+            )
+            assertTrue(recover(queue,
+                verified = lookup(advancedRemote, revision = 666)))
+            val outbox = storage.saved()
+            assertEquals(listOf("blocked-progress", "later-progress"),
+                outbox.recoveryArchive.map { it.eventId })
+            assertEquals(listOf(666L, 667L),
+                outbox.pending.map { it.expectedRevision })
+            val types = outbox.pending.map {
+                Json.parseToJsonElement(it.payload).jsonObject["type"]
+                    ?.jsonPrimitive?.content
+            }
+            assertEquals(listOf("REPOSITION", "PROGRESS"), types)
+            assertEquals(RewatchOutboxDrainResult.DRAINED,
+                queue.drain(profile, account, device) {
+                    RewatchOutboxSubmitResult.Accepted(it.expectedRevision + 1L)
+                })
+            assertEquals(0, queue.pendingCount(profile, account, device))
+            assertEquals(2, storage.saved().recoveryArchive.size)
+            assertEquals(668L,
+                storage.saved().acknowledged.getValue(series).revision)
+        }
+
+    @Test
+    fun futureRevisionOrBrokenOfflineChainCannotBeArchived() = runBlocking {
+        val storage = MemoryStorage()
+        val queue = queue(storage)
+        assertTrue(queue.enqueue(profile, account, device,
+            legacy(revision = 667)))
+        val original = storage.json
+        assertFalse(recover(queue, verified = lookup(revision = 666)))
+        assertEquals(original, storage.json)
+
+        assertTrue(queue.enqueue(profile, account, device,
+            legacy("revision-gap", "PROGRESS", 669)))
+        val broken = storage.json
+        assertFalse(recover(queue, verified = lookup(revision = 670)))
+        assertEquals(broken, storage.json)
     }
 
     @Test

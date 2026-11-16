@@ -192,8 +192,8 @@ internal object IosRewatchSyncRuntime {
     }
 
     /**
-     * No automatic polling. Call only from an explicitly enabled future
-     * refresh hook. Every incoming update compares the local mutation
+     * Called by the gated foreground, playback-entry and recovery hooks.
+     * Every incoming update compares the local mutation
      * generation under RewatchSessionRepository's existing mutex.
      */
     suspend fun pullSeries(series: String): Boolean = mutex.withLock {
@@ -211,14 +211,23 @@ internal object IosRewatchSyncRuntime {
             val remote = verified.remoteSession ?: return@withLock false
             if (verified.checkpoint !is RewatchRemoteCheckpoint.Synced)
                 return@withLock false
-            val pending = outbox.hasPendingForSeries(
+            var pending = outbox.hasPendingForSeries(
                 identity.profileId, identity.simklAccountId,
                 identity.deviceId, series
             )
-            if (pending || !current()) return@withLock false
             val local = observed.sessions.singleOrNull {
                 it.canonicalSeriesId.trim().equals(series.trim(), ignoreCase = true)
             }
+            if (pending && local != null && current()) {
+                outbox.archiveSupersededPlayback(identity, local, observed.generation,
+                    verified, localUnchanged = {
+                        current() && RewatchSessionRepository.observeSync(identity.profileId) == observed
+                    })
+                pending = outbox.hasPendingForSeries(identity.profileId,
+                    identity.simklAccountId, identity.deviceId, series)
+            }
+            if (pending || !current()) return@withLock false
+            val archived = outbox.archivedProgressProof(identity, series)
             val applied = if (local != null && sameRewatchCursor(local, remote)) {
                 RewatchSessionRepository.certifyAuthenticatedRemoteMatch(
                     profileId = identity.profileId,
@@ -240,6 +249,7 @@ internal object IosRewatchSyncRuntime {
                     remote = verified,
                     pendingOrUnpublished = false,
                     nowEpochMs = SimklPlatformClock.nowEpochMs(),
+                    archivedProgress = archived,
                     stillAuthenticated = ::current
                 )
             }
@@ -330,6 +340,13 @@ internal object IosRewatchSyncRuntime {
                 )
             }
             override suspend fun upload(): RewatchOutboxDrainResult = uploadPending()
+
+            override suspend fun recoverUploadConflict(): Boolean {
+                val identity = currentIdentity() ?: return false
+                val blocked = outbox.pendingSeriesIds(identity.profileId,
+                    identity.simklAccountId, identity.deviceId).firstOrNull() ?: return false
+                return pullSeries(blocked) && currentIdentity() == identity
+            }
         })
     }
 

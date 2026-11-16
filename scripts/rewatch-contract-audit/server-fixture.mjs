@@ -15,34 +15,67 @@ const session = {
   episode: { season: 5, episode: 26 }, positionMs: 0, durationMs: 0,
   lastCompletedEpisode: { season: 5, episode: 25 }, phase: 'NEXT_UP'
 };
-// Produce revision 666 via real store transitions; no private DB injection.
-const initial = { ...session, phase: 'PLAYING', lastCompletedEpisode: null };
-for (let revision = 0; revision < 664; revision++) {
-  const result = await store.apply('simkl:12003', {
-    eventId: `seed-${revision}`, deviceId: 'simkl-device:seed',
+let completed;
+if (process.argv[3] === 'completion') {
+  // Exact reported conflict: Android completed S6E4 against revision 1040,
+  // while another client moved the same session to S5E17 at revision 1044.
+  const playing = { ...session, episode: { season: 6, episode: 4 },
+    phase: 'PLAYING', lastCompletedEpisode: null, positionMs: 1200000, durationMs: 1298966 };
+  for (let revision = 0; revision < 1040; revision++) {
+    const result = await store.apply('simkl:12003', {
+      eventId: `completion-seed-${revision}`, deviceId: 'simkl-device:seed',
+      canonicalSeriesId: session.canonicalSeriesId, sessionId: session.sessionId,
+      expectedRevision: revision,
+      ...(revision === 0 ? { type: 'IMPORT_SNAPSHOT', session: playing }
+        : { type: 'PROGRESS', episode: playing.episode, positionMs: 1200000, durationMs: 1298966 })
+    });
+    if (result.status !== 200) throw Error('Completion fixture seed rejected');
+  }
+  const move = await store.apply('simkl:12003', {
+    eventId: 'ipad-select-e17', deviceId: 'simkl-device:ipad-audit',
     canonicalSeriesId: session.canonicalSeriesId, sessionId: session.sessionId,
-    expectedRevision: revision,
-    ...(revision === 0 ? { type: 'IMPORT_SNAPSHOT', session: initial }
-      : { type: 'PROGRESS', episode: initial.episode, positionMs: revision * 1000, durationMs: 1300000 })
+    expectedRevision: 1040, type: 'REPOSITION', episode: { season: 5, episode: 17 }
   });
-  if (result.status !== 200) throw Error('Fixture seed rejected');
+  if (move.status !== 200) throw Error('iPad selection rejected');
+  for (const [offset, position] of [1000, 20000, 31948].entries()) {
+    completed = await store.apply('simkl:12003', {
+      eventId: `ipad-e17-progress-${offset}`, deviceId: 'simkl-device:ipad-audit',
+      canonicalSeriesId: session.canonicalSeriesId, sessionId: session.sessionId,
+      expectedRevision: 1041 + offset, type: 'PROGRESS',
+      episode: { season: 5, episode: 17 }, positionMs: position, durationMs: 1298966
+    });
+    if (completed.status !== 200) throw Error('iPad progress rejected');
+  }
+} else {
+  // Produce revision 666 via real store transitions; no private DB injection.
+  const initial = { ...session, phase: 'PLAYING', lastCompletedEpisode: null };
+  for (let revision = 0; revision < 664; revision++) {
+    const result = await store.apply('simkl:12003', {
+      eventId: `seed-${revision}`, deviceId: 'simkl-device:seed',
+      canonicalSeriesId: session.canonicalSeriesId, sessionId: session.sessionId,
+      expectedRevision: revision,
+      ...(revision === 0 ? { type: 'IMPORT_SNAPSHOT', session: initial }
+        : { type: 'PROGRESS', episode: initial.episode, positionMs: revision * 1000, durationMs: 1300000 })
+    });
+    if (result.status !== 200) throw Error('Fixture seed rejected');
+  }
+  // The final completion produces the exact reported S5E26 NEXT_UP cursor.
+  // First reposition to E25, then complete it, starting at revision 664.
+  const current = store.get('simkl:12003', 'tt0386676');
+  const move = await store.apply('simkl:12003', {
+    eventId: 'seed-e25', deviceId: 'simkl-device:seed', canonicalSeriesId: session.canonicalSeriesId,
+    sessionId: session.sessionId, expectedRevision: current.revision,
+    type: 'REPOSITION', episode: { season: 5, episode: 25 }
+  });
+  if (move.status !== 200) throw Error('Fixture reposition rejected');
+  completed = await store.apply('simkl:12003', {
+    eventId: 'seed-next-up', deviceId: 'simkl-device:seed', canonicalSeriesId: session.canonicalSeriesId,
+    sessionId: session.sessionId, expectedRevision: move.body.revision,
+    type: 'COMPLETE_EPISODE', episode: { season: 5, episode: 25 },
+    resultPhase: 'NEXT_UP', nextEpisode: { season: 5, episode: 26 }
+  });
+  if (completed.status !== 200) throw Error('Fixture completion rejected');
 }
-// The final completion produces the exact reported S5E26 NEXT_UP cursor.
-// First reposition to E25, then complete it, starting at revision 664.
-const current = store.get('simkl:12003', 'tt0386676');
-const move = await store.apply('simkl:12003', {
-  eventId: 'seed-e25', deviceId: 'simkl-device:seed', canonicalSeriesId: session.canonicalSeriesId,
-  sessionId: session.sessionId, expectedRevision: current.revision,
-  type: 'REPOSITION', episode: { season: 5, episode: 25 }
-});
-if (move.status !== 200) throw Error('Fixture reposition rejected');
-const completed = await store.apply('simkl:12003', {
-  eventId: 'seed-next-up', deviceId: 'simkl-device:seed', canonicalSeriesId: session.canonicalSeriesId,
-  sessionId: session.sessionId, expectedRevision: move.body.revision,
-  type: 'COMPLETE_EPISODE', episode: { season: 5, episode: 25 },
-  resultPhase: 'NEXT_UP', nextEpisode: { season: 5, episode: 26 }
-});
-if (completed.status !== 200) throw Error('Fixture completion rejected');
 const server = makeServer(store, {
   ['a'.repeat(64)]: { principal: 'simkl:12003', deviceId: 'simkl-device:ipad-audit' },
   ['b'.repeat(64)]: { principal: 'simkl:12003', deviceId: 'simkl-device:tv-audit' },

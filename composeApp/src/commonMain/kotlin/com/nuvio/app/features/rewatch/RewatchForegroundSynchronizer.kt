@@ -27,6 +27,7 @@ internal interface RewatchForegroundAccess {
         session: RewatchSession
     ): Boolean
     suspend fun upload(): RewatchOutboxDrainResult
+    suspend fun recoverUploadConflict(): Boolean = false
 }
 
 internal class RewatchForegroundSynchronizer(
@@ -59,9 +60,16 @@ internal class RewatchForegroundSynchronizer(
         if (!current()) return RewatchForegroundResult.PROFILE_CHANGED
         // Drain previously persisted offline events FIRST. Otherwise a remote
         // GET would see pending events, decline to apply the remote cursor,
-        // and leave the queue stranded after reconnect. A 409 always stops
-        // before any state merge and never drops the event.
-        when (access.upload()) {
+        // and leave the queue stranded after reconnect. A 409 may be a paused
+        // player's superseded passive progress. A verified, archived handoff
+        // can unblock it; explicit/unexplained queued changes still stop here.
+        var drained = access.upload()
+        if (drained == RewatchOutboxDrainResult.CONFLICT ||
+            drained == RewatchOutboxDrainResult.INVALID_PROGRESS) {
+            if (!current()) return RewatchForegroundResult.PROFILE_CHANGED
+            if (access.recoverUploadConflict()) drained = access.upload()
+        }
+        when (drained) {
             RewatchOutboxDrainResult.EMPTY, RewatchOutboxDrainResult.DRAINED -> Unit
             RewatchOutboxDrainResult.CONFLICT, RewatchOutboxDrainResult.INVALID_PROGRESS ->
                 return RewatchForegroundResult.LOCAL_CONFLICT

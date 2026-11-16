@@ -22,6 +22,9 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.Lifecycle
 import com.nuvio.app.core.auth.AuthRepository
 import com.nuvio.app.core.auth.AuthState
 import com.nuvio.app.core.network.NetworkCondition
@@ -330,13 +333,14 @@ fun HomeScreen(
     val profileState by ProfileRepository.state.collectAsStateWithLifecycle()
     val activeProfileId = profileState.activeProfile?.profileIndex ?: 1
     val replaySnapshot by RewatchSessionRepository.snapshot.collectAsStateWithLifecycle()
+    val replayLifecycleOwner = LocalLifecycleOwner.current
     var verifiedReplayCards by remember(activeProfileId) {
         mutableStateOf<List<ContinueWatchingItem>>(emptyList())
     }
 
     // Rehydrate profile-isolated replay state whenever Home becomes active.
     // No writes are made to normal Simkl progress or watched history.
-    ScreenActivityEffect(activeProfileId) { active ->
+    ScreenActivityEffect(activeProfileId, replayLifecycleOwner) { active ->
         if (!active) return@ScreenActivityEffect
         try {
             RewatchSessionRepository.load(activeProfileId)
@@ -348,7 +352,12 @@ fun HomeScreen(
         if (RewatchMobileSyncGate.ENABLED) {
             // Runs separately from Home metadata, skeletons and CW rendering.
             // Never hold up the first frame for optional replay transport.
-            launch { RewatchPlatformSyncLifecycle.homeForeground() }
+            launch {
+                replayLifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                    RewatchPlatformSyncLifecycle.homeForeground()
+                    kotlinx.coroutines.awaitCancellation()
+                }
+            }
         }
     }
 

@@ -1,5 +1,7 @@
 package PACKAGE_NAME
 
+EXTRA_IMPORTS
+
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -25,10 +27,12 @@ fun main(args: Array<String>) = runBlocking {
     val series = "tt0386676"
     val credential = ReplayBootstrapCredential(account, token, device, Long.MAX_VALUE)
     val http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build()
+    var posts = 0
     // The production API still enforces its HTTPS origin. ONLY this test
     // exchange redirects its transport to the private loopback fixture.
     val api = RewatchVpsApi(RewatchHttpExchange { method, url, headers, body ->
         check(URI(url).host == "nuviorewatch.duckdns.org")
+        if (method == "POST") posts++
         val request = HttpRequest.newBuilder(URI(origin + URI(url).rawPath))
         headers.forEach { (name, value) -> request.header(name, value) }
         request.method(method, if (body.isEmpty()) HttpRequest.BodyPublishers.noBody()
@@ -51,6 +55,74 @@ fun main(args: Array<String>) = runBlocking {
     }
     val disk = AuditDisk()
     val queue = RewatchSyncOutbox(disk) { p, a, d -> p == profile && a == account && d == device }
+    if (mode == "completion") {
+        check((remote.checkpoint as RewatchRemoteCheckpoint.Synced).revision == 1044L)
+        check(snapshot.episode == RewatchEpisode(5, 17) && snapshot.positionMs == 31948L)
+        val before = snapshot.copy(episode = RewatchEpisode(6, 4), positionMs = 1200000,
+            durationMs = 1298966, phase = RewatchPhase.PLAYING,
+            lastCompletedEpisode = null, updatedAtEpochMs = 100)
+        val completed = completeRewatchEpisode(before, before.episode,
+            listOf(before.episode, RewatchEpisode(6, 5)), true, 200)
+        check(completed.episode == RewatchEpisode(6, 5) && completed.phase == RewatchPhase.NEXT_UP)
+        check(queue.enqueueCommittedTransition(profile, account, device, before, completed,
+            RewatchRemoteCheckpoint.Synced(1040, before.sessionId), "completion-$device"))
+        val original = Json.decodeFromString<RewatchOutboxEnvelope>(requireNotNull(disk.saved)).pending
+        check(queue.drain(profile, account, device) { api.submit(credential, it) } == RewatchOutboxDrainResult.CONFLICT)
+        val identity = RewatchCommitIdentity(profile, account, device)
+        check(queue.archiveSupersededPlayback(identity, completed, 1045, lookup(), { true }))
+        val restarted = RewatchSyncOutbox(disk) { _, _, _ -> true }
+        val receipt = restarted.archivedProgressProof(identity, series)
+        val merged = requireNotNull(mergeRewatchRemoteWithLedger(
+            sessions = listOf(completed), ledger = RewatchLocalSyncLedger(generation = 1045),
+            profileId = profile, simklAccountId = account, deviceId = device,
+            expectedLocal = completed, expectedGeneration = 1045, canonicalSeriesId = series,
+            remoteLookup = lookup(), pendingOrUnpublished = false,
+            appliedAtEpochMs = 300, archivedProgress = receipt
+        ))
+        val adopted = merged.first.single()
+        check(adopted.episode == snapshot.episode && adopted.positionMs == 31948L)
+        check(recordRewatchProgress(adopted, before.episode, 1200000, 1298966, 400) == adopted)
+        check(restarted.recordVerifiedCleanBaseline(profile, account, device, adopted, lookup()))
+        val saved = Json.decodeFromString<RewatchOutboxEnvelope>(requireNotNull(disk.saved))
+        check(saved.pending.isEmpty() && saved.recoveryArchive == original && saved.archivedProgress.isEmpty())
+        check(saved.acknowledged.getValue(series).revision == 1044L)
+        check(lookup().checkpoint == remote.checkpoint && posts == 1)
+        check(restarted.enqueueCommittedTransition(profile, account, device, adopted,
+            adopted.copy(positionMs = 50000, updatedAtEpochMs = 500),
+            RewatchRemoteCheckpoint.Unknown, "ordinary-progress-$device"))
+        val resumed = Json.decodeFromString<RewatchOutboxEnvelope>(requireNotNull(disk.saved))
+        check(resumed.pending.single().expectedRevision == 1044L && resumed.recoveryArchive == original)
+        println("COMPLETION_1040_TO_1044=PASS DEVICE=$device LOCAL=S5E17 POSITION=31948 ARCHIVE=EXACT RESTART=PASS VPS_WRITES=NONE")
+        return@runBlocking
+    }
+    if (mode == "handoff") {
+        val paused = snapshot.copy(episode = RewatchEpisode(6, 4), positionMs = 31948,
+            durationMs = 1300000, phase = RewatchPhase.PLAYING, updatedAtEpochMs = 100)
+        val old = paused.copy(positionMs = 23000, updatedAtEpochMs = 50)
+        check(queue.enqueueCommittedTransition(profile, account, device, old, paused,
+            RewatchRemoteCheckpoint.Synced(1, snapshot.sessionId), "paused-$device"))
+        val original = Json.decodeFromString<RewatchOutboxEnvelope>(requireNotNull(disk.saved)).pending
+        check(queue.drain(profile, account, device) { api.submit(credential, it) } == RewatchOutboxDrainResult.CONFLICT)
+        val identity = RewatchCommitIdentity(profile, account, device)
+        check(queue.archiveSupersededPlayback(identity, paused, 7, lookup(), { true }))
+        val restarted = RewatchSyncOutbox(disk) { _, _, _ -> true }
+        val receipt = restarted.archivedProgressProof(identity, series)
+        val merged = requireNotNull(mergeRewatchRemoteWithLedger(
+            sessions = listOf(paused), ledger = RewatchLocalSyncLedger(generation = 7),
+            profileId = profile, simklAccountId = account, deviceId = device,
+            expectedLocal = paused, expectedGeneration = 7, canonicalSeriesId = series,
+            remoteLookup = lookup(), pendingOrUnpublished = false,
+            appliedAtEpochMs = 200, archivedProgress = receipt
+        ))
+        val adopted = merged.first.single()
+        check(adopted.episode == snapshot.episode && adopted.positionMs == snapshot.positionMs)
+        check(recordRewatchProgress(adopted, paused.episode, 31948, 1300000, 300) == adopted)
+        val saved = Json.decodeFromString<RewatchOutboxEnvelope>(requireNotNull(disk.saved))
+        check(saved.pending.isEmpty() && saved.recoveryArchive == original)
+        check(lookup().checkpoint == remote.checkpoint) // No server write on handoff.
+        println("PAUSED_HANDOFF=PASS DEVICE=$device ARCHIVE=EXACT RESTART=PASS OLD_PLAYER=BLOCKED VPS_WRITES=NONE")
+        return@runBlocking
+    }
     val headType = args[4]
     val selected = args[5].toInt()
     val before = snapshot.copy(

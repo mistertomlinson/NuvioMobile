@@ -37,12 +37,17 @@ with tempfile.TemporaryDirectory(prefix="rewatch-clients-") as temp:
             jars = [runtime / "ios-common" / name for name in
                     ("coroutines.jar", "serialization-core.jar", "serialization-json.jar")]
         names = ["RewatchSessionPolicy", "RewatchCommittedEventPlanner", "RewatchSyncOutbox",
-                 "RewatchRemoteCheckpointReader", "RewatchVpsApi", "RewatchSilentSimklBootstrap"]
+                 "RewatchRemoteCheckpointReader", "RewatchVpsApi", "RewatchSilentSimklBootstrap",
+                 "RewatchCommittedSaveHandoff", "RewatchPassiveQueueProjection"]
         if platform == "ipad":
             names.append("RewatchLocalSyncLedger")
         sources = [str(folder / (name + ".kt")) for name in names]
+        extra_imports = ""
+        if platform == "tv":
+            sources.append(str(folder.parents[1] / "data/local/RewatchLocalSyncLedger.kt"))
+            extra_imports = "import com.nuvio.tv.data.local.RewatchLocalSyncLedger\nimport com.nuvio.tv.data.local.mergeRewatchRemoteWithLedger\n"
         probe = work / (platform + "-probe.kt")
-        probe.write_text((here / "ClientContractAudit.kt.template").read_text().replace("PACKAGE_NAME", package))
+        probe.write_text((here / "ClientContractAudit.kt.template").read_text().replace("PACKAGE_NAME", package).replace("EXTRA_IMPORTS", extra_imports))
         jar = work / (platform + ".jar")
         cp = ":".join(map(str, jars))
         subprocess.run(["bash", str(compiler / "bin/kotlinc"), *sources, str(probe),
@@ -61,7 +66,24 @@ with tempfile.TemporaryDirectory(prefix="rewatch-clients-") as temp:
         subprocess.run(clients["tv"] + [origin, "pull", "simkl-device:tv-audit", "b", "16", "34000"], check=True)
         subprocess.run(clients["tv"] + [origin, "repair", "simkl-device:tv-audit", "b", "REPOSITION", "15"], check=True)
         subprocess.run(clients["ipad"] + [origin, "pull", "simkl-device:ipad-audit", "a", "15", "34000"], check=True)
+        for platform, device, token in (("tv", "simkl-device:tv-audit", "b"),
+                                        ("ipad", "simkl-device:ipad-audit", "a")):
+            subprocess.run(clients[platform] + [origin, "handoff", device, token], check=True)
         print("BIDIRECTIONAL_KOTLIN_NODE_CONTRACT=PASS", flush=True)
+    finally:
+        fixture.terminate()
+        fixture.wait(timeout=15)
+
+    fixture = subprocess.Popen(["node", str(here / "server-fixture.mjs"),
+                                str(args.server_repo.resolve() / "services/rewatch-sync"), "completion"],
+                               stdout=subprocess.PIPE, text=True)
+    try:
+        state = json.loads(fixture.stdout.readline())
+        assert state["revision"] == 1044, state
+        for platform, device, token in (("tv", "simkl-device:tv-audit", "b"),
+                                        ("ipad", "simkl-device:ipad-audit", "a")):
+            subprocess.run(clients[platform] + [state["origin"], "completion", device, token], check=True)
+        print("BIDIRECTIONAL_COMPLETION_CONFLICT_CONTRACT=PASS", flush=True)
     finally:
         fixture.terminate()
         fixture.wait(timeout=15)

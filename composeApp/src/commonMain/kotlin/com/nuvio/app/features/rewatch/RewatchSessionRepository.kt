@@ -111,6 +111,7 @@ internal object RewatchSessionRepository : RewatchSessionAccess {
         remote: RewatchRemoteLookup,
         pendingOrUnpublished: Boolean,
         nowEpochMs: Long,
+        archivedProgress: RewatchArchivedProgressProof? = null,
         stillAuthenticated: () -> Boolean
     ): Boolean = mutex.withLock {
         if (profileId <= 0 || observed.profileId != profileId ||
@@ -135,7 +136,8 @@ internal object RewatchSessionRepository : RewatchSessionAccess {
             canonicalSeriesId = canonicalSeriesId,
             remoteLookup = remote,
             pendingOrUnpublished = pendingOrUnpublished,
-            appliedAtEpochMs = nowEpochMs
+            appliedAtEpochMs = nowEpochMs,
+            archivedProgress = archivedProgress
         ) ?: return@withLock false
         if (ProfileRepository.activeProfileId != profileId ||
             !stillAuthenticated()) return@withLock false

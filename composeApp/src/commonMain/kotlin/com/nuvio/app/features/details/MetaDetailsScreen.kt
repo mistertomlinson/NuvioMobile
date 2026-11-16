@@ -2,6 +2,12 @@ package com.nuvio.app.features.details
 
 import com.nuvio.app.features.rewatch.RewatchEpisode
 import com.nuvio.app.features.rewatch.RewatchManualEpisodeSelection
+import com.nuvio.app.features.rewatch.RewatchSessionRepository
+import com.nuvio.app.features.rewatch.RewatchMobileSyncGate
+import com.nuvio.app.features.rewatch.RewatchPlatformSyncLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.Crossfade
@@ -192,7 +198,24 @@ fun MetaDetailsScreen(
         EpisodeShuffleRepository.ensureLoaded()
         EpisodeShuffleRepository.uiState
     }.collectAsStateWithLifecycle()
-    val shuffleProfileId = ProfileRepository.activeProfileId
+    val detailsProfileState by ProfileRepository.state.collectAsStateWithLifecycle()
+    val shuffleProfileId = detailsProfileState.activeProfile?.profileIndex ?: 1
+    val replaySnapshot by RewatchSessionRepository.snapshot.collectAsStateWithLifecycle()
+    val replayLifecycleOwner = LocalLifecycleOwner.current
+    ScreenActivityEffect(type, id, shuffleProfileId, replayLifecycleOwner) { active ->
+        if (!active) return@ScreenActivityEffect
+        replayLifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            try {
+                RewatchSessionRepository.load(shuffleProfileId)
+                if (RewatchMobileSyncGate.ENABLED) RewatchPlatformSyncLifecycle.homeForeground()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Preserve the local cursor when optional sync is unavailable.
+            }
+            kotlinx.coroutines.awaitCancellation()
+        }
+    }
     var shuffleVisit by remember(type, id, shuffleProfileId) { mutableStateOf(WatchProgressClock.nowEpochMs()) }
     var shuffleWasInactive by remember(type, id, shuffleProfileId) { mutableStateOf(false) }
     var showShuffle by remember(type, id, shuffleProfileId) { mutableStateOf(false) }
@@ -632,23 +655,29 @@ fun MetaDetailsScreen(
                 } else {
                     null
                 }
-                val seriesAction = remember(watchProgressUiState.entries, watchedUiState.items, meta, todayIsoDate, cwPrefs.upNextFromFurthestEpisode, watchedUiState.watchedKeys, shuffleSettings, shuffleVisit, shuffleProfileId) {
-                    if (shuffleSettings.enabled) meta.shufflePrimaryAction(
-                        profileId = shuffleProfileId,
-                        settings = shuffleSettings,
-                        entries = watchProgressUiState.entries,
-                        watchedKeys = watchedUiState.watchedKeys,
-                        visit = shuffleVisit,
-                    ) else {
-                        EpisodeShuffleRepository.shuffle.clearSelection(shuffleProfileId, meta.id, ShuffleSurface.DETAIL)
-                        meta.seriesPrimaryAction(
+                val rewatchAction = remember(meta, shuffleProfileId, replaySnapshot, todayIsoDate) {
+                    meta.rewatchDetailsAction(shuffleProfileId, replaySnapshot, todayIsoDate)
+                }
+                val rewatchPlaybackBlocked = rewatchAction?.playbackBlocked == true
+                val seriesAction = remember(watchProgressUiState.entries, watchedUiState.items, meta, todayIsoDate, cwPrefs.upNextFromFurthestEpisode, watchedUiState.watchedKeys, shuffleSettings, shuffleVisit, shuffleProfileId, rewatchAction) {
+                    selectDetailsPrimaryAction(rewatchAction) {
+                        if (shuffleSettings.enabled) meta.shufflePrimaryAction(
+                            profileId = shuffleProfileId,
+                            settings = shuffleSettings,
                             entries = watchProgressUiState.entries,
-                            watchedItems = watchedUiState.items,
-                            todayIsoDate = todayIsoDate,
-                            preferFurthestEpisode = cwPrefs.upNextFromFurthestEpisode,
                             watchedKeys = watchedUiState.watchedKeys,
-                            allowRewatch = true,
-                        )
+                            visit = shuffleVisit,
+                        ) else {
+                            EpisodeShuffleRepository.shuffle.clearSelection(shuffleProfileId, meta.id, ShuffleSurface.DETAIL)
+                            meta.seriesPrimaryAction(
+                                entries = watchProgressUiState.entries,
+                                watchedItems = watchedUiState.items,
+                                todayIsoDate = todayIsoDate,
+                                preferFurthestEpisode = cwPrefs.upNextFromFurthestEpisode,
+                                watchedKeys = watchedUiState.watchedKeys,
+                                allowRewatch = true,
+                            )
+                        }
                     }
                 }
                 val seriesActionVideo = remember(seriesAction, meta.id, meta.videos) {
@@ -794,20 +823,23 @@ fun MetaDetailsScreen(
                         }
                     }
                 }
+                val primaryPlaybackParentId = rewatchAction?.session?.canonicalSeriesId ?: meta.id
+                val primaryPlaybackType = if (rewatchAction != null) "series" else meta.type
                 val primaryVideoId = seriesStreamVideoId ?: seriesAction?.videoId ?: meta.id
-                val shufflePoolEmpty = shuffleSettings.enabled && seriesAction == null
-                val isPrimaryPlayEnabled = shufflePoolEmpty || playbackAvailability.canPlay(
-                    type = meta.type,
+                val shufflePoolEmpty = rewatchAction == null && shuffleSettings.enabled && seriesAction == null
+                val isPrimaryPlayEnabled = !rewatchPlaybackBlocked && (shufflePoolEmpty || playbackAvailability.canPlay(
+                    type = primaryPlaybackType,
                     videoId = primaryVideoId,
-                    parentMetaId = meta.id,
+                    parentMetaId = primaryPlaybackParentId,
                     seasonNumber = seriesAction?.seasonNumber,
                     episodeNumber = seriesAction?.episodeNumber,
-                )
+                ))
                 val playText = stringResource(Res.string.action_play)
                 val resumeText = stringResource(Res.string.action_resume)
                 val chooseEpisodesText = stringResource(Res.string.shuffle_change_selection)
-                val playButtonLabel = remember(movieProgress, seriesAction, meta.type, hasEpisodes, playText, resumeText, shufflePoolEmpty, chooseEpisodesText) {
+                val playButtonLabel = remember(movieProgress, seriesAction, meta.type, hasEpisodes, playText, resumeText, shufflePoolEmpty, chooseEpisodesText, rewatchAction) {
                     when {
+                        rewatchAction != null -> rewatchAction.label
                         shufflePoolEmpty -> chooseEpisodesText
                         (meta.type == "series" || hasEpisodes) && seriesAction != null ->
                             seriesAction.label
@@ -817,25 +849,17 @@ fun MetaDetailsScreen(
                     }
                 }
                 val onPrimaryPlayClick: () -> Unit = {
+                    RewatchManualEpisodeSelection.clearForPrimaryAction()
                     when {
+                        ProfileRepository.activeProfileId != shuffleProfileId -> Unit
+                        rewatchPlaybackBlocked -> Unit
                         shufflePoolEmpty -> showShuffle = true
                         (meta.type == "series" || hasEpisodes) && seriesAction != null -> {
-                            val season = seriesAction.seasonNumber
-                            val number = seriesAction.episodeNumber
-                            if (onPlay != null && season != null && season > 0 &&
-                                number != null && number > 0) {
-                                RewatchManualEpisodeSelection.arm(
-                                    ProfileRepository.activeProfileId, meta.id,
-                                    RewatchEpisode(season, number),
-                                    WatchProgressClock.nowEpochMs(),
-                                    seriesAction.resumePositionMs
-                                )
-                            }
                             onPlay?.invoke(
-                                meta.type,
+                                primaryPlaybackType,
                                 seriesStreamVideoId ?: seriesAction.videoId,
-                                meta.id,
-                                meta.type,
+                                primaryPlaybackParentId,
+                                primaryPlaybackType,
                                 meta.name,
                                 meta.logo,
                                 meta.poster,
@@ -872,27 +896,18 @@ fun MetaDetailsScreen(
                 val manualPlayHandler = onPlayManually
                 val showManualPlayOption = manualPlayHandler != null && StreamAutoPlayPolicy.isEffectivelyEnabled(playerSettingsUiState)
                 val onPrimaryPlayLongClick: (() -> Unit)? = manualPlayHandler
-                    ?.takeIf { !shufflePoolEmpty && showManualPlayOption && playbackAvailability.canStream(meta.type, primaryVideoId) }
+                    ?.takeIf { !rewatchPlaybackBlocked && !shufflePoolEmpty && showManualPlayOption && playbackAvailability.canStream(primaryPlaybackType, primaryVideoId) }
                     ?.let { manualPlay ->
                         {
+                            RewatchManualEpisodeSelection.clearForPrimaryAction()
                             when {
+                                ProfileRepository.activeProfileId != shuffleProfileId -> Unit
                                 (meta.type == "series" || hasEpisodes) && seriesAction != null -> {
-                                    val season = seriesAction.seasonNumber
-                                    val number = seriesAction.episodeNumber
-                                    if (season != null && season > 0 &&
-                                        number != null && number > 0) {
-                                        RewatchManualEpisodeSelection.arm(
-                                            ProfileRepository.activeProfileId, meta.id,
-                                            RewatchEpisode(season, number),
-                                            WatchProgressClock.nowEpochMs(),
-                                            seriesAction.resumePositionMs
-                                        )
-                                    }
                                     manualPlay(
-                                        meta.type,
+                                        primaryPlaybackType,
                                         seriesStreamVideoId ?: seriesAction.videoId,
-                                        meta.id,
-                                        meta.type,
+                                        primaryPlaybackParentId,
+                                        primaryPlaybackType,
                                         meta.name,
                                         meta.logo,
                                         meta.poster,

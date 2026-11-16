@@ -53,5 +53,8 @@ internal object RewatchManualEpisodeSelection {
         return Selected(requested.resumePositionMs)
     }
 
+    /** Main Details Play/stream-selection actions are not episode-picker intent. */
+    fun clearForPrimaryAction() { pending = null }
+
     internal fun clearForTests() { pending = null }
 }

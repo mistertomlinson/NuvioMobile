@@ -178,7 +178,9 @@ class RewatchLocalSyncLedgerTest {
         val changed = onLocalRewatchCommitted(ledger, unrelated)
         assertEquals(4L, changed.generation)
         assertEquals(1, changed.cleanBySeries.size)
-        // Proof remains available but is no longer current until recertified
-        assertNull(apply(ledger = changed, generation = changed.generation))
+        // Reject an old observation, but retain the untouched title's proof
+        // for a fresh GET even when that remote episode has already changed.
+        assertNull(apply(ledger = changed, generation = ledger.generation))
+        assertTrue(apply(ledger = changed, generation = changed.generation) != null)
     }
 }

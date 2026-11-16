@@ -16,8 +16,9 @@ import kotlinx.serialization.json.longOrNull
  * calls and no writes to the local Continue Watching cache.
  *
  * The caller MUST persist each accepted state transition via [RewatchOutboxStorage]
- * BEFORE attempting network delivery. No event may be removed until acknowledged.
- * This queue deliberately stops at 409 rather than discarding offline changes.
+ * BEFORE attempting network delivery. Events are acknowledged or preserved
+ * verbatim in the recovery archive during validated supersession. A 409 alone
+ * never authorizes discarding or rebasing offline changes.
  */
 @Serializable
 internal data class RewatchQueuedEvent(
@@ -105,7 +106,19 @@ internal data class RewatchOutboxEnvelope(
     val clean: Map<String, RewatchCleanCursor> = emptyMap(),
     // Never destroy old offline replay events during an explicit recovery.
     // Superseded events stay available locally for audit or manual restore.
-    val recoveryArchive: List<RewatchQueuedEvent> = emptyList()
+    val recoveryArchive: List<RewatchQueuedEvent> = emptyList(),
+    // Crash-safe receipt for automatic playback events archived after a newer
+    // authenticated cursor superseded them. Keep this serialized field name.
+    // Local generation is checked atomically before applying that handoff.
+    val archivedProgress: Map<String, RewatchArchivedProgressProof> = emptyMap()
+)
+
+@Serializable
+internal data class RewatchArchivedProgressProof(
+    val simklAccountId: String,
+    val deviceId: String,
+    val generation: Long,
+    val cursor: RewatchCleanCursor
 )
 
 internal interface RewatchOutboxStorage {
@@ -212,6 +225,17 @@ internal class RewatchSyncOutbox(
                 (cursor.completedEpisode == null || cursor.completedEpisode > 0) &&
                 RewatchPhase.entries.any { it.name == cursor.phase }
         }) { "Corrupted clean replay baseline" }
+        require(value.archivedProgress.all { (key, proof) ->
+            proof.simklAccountId == accountId && proof.deviceId == deviceId &&
+                proof.generation >= 0L && proof.generation < Long.MAX_VALUE &&
+                key == seriesKey(proof.cursor.canonicalSeriesId) &&
+                proof.cursor.ownerKey == "local-profile:$profileId" &&
+                proof.cursor.revision > 0L && proof.cursor.revision < Long.MAX_VALUE &&
+                proof.cursor.sessionId.isNotBlank() &&
+                proof.cursor.season > 0 && proof.cursor.episode > 0 &&
+                proof.cursor.positionMs >= 0L && proof.cursor.durationMs >= 0L &&
+                validArchivedPlaybackCursor(proof.cursor)
+        }) { "Corrupted archived replay progress proof" }
         return value
     }
 
@@ -293,9 +317,100 @@ internal class RewatchSyncOutbox(
         ) ?: return@withLock false
         if (!stillCurrent(profileId, simklAccountId, deviceId)) return@withLock false
         storage.write(profileId, json.encodeToString(
-            old.copy(pending = old.pending + planned)
+            old.copy(pending = old.pending + planned,
+                archivedProgress = old.archivedProgress - key)
         ))
         true
+    }
+
+    /**
+     * A newer authenticated cursor can supersede obsolete automatic playback
+     * events, including completion and metadata resolution. Replay the entire
+     * chain and match its final cursor before preserving it in the archive.
+     * Explicit selections and unexplained changes stay pending. The receipt
+     * survives a crash between this write and the atomic local application.
+     */
+    suspend fun archiveSupersededPlayback(
+        identity: RewatchCommitIdentity,
+        local: RewatchSession,
+        generation: Long,
+        lookup: RewatchRemoteLookup,
+        localUnchanged: suspend () -> Boolean,
+        diagnostic: (String) -> Unit = {}
+    ): Boolean = mutex.withLock {
+        fun decline(reason: String): Boolean {
+            runCatching { diagnostic(reason) }
+            return false
+        }
+        val (profileId, accountId, deviceId) = identity
+        if (!stillCurrent(profileId, accountId, deviceId) || !localUnchanged() ||
+            local.ownerKey != "local-profile:$profileId" || generation < 0L ||
+            generation >= Long.MAX_VALUE - 1L) return@withLock decline("IDENTITY_OR_LOCAL_CHANGED")
+        val verified = lookup as? RewatchRemoteLookup.Verified ?: return@withLock decline("UNVERIFIED_REMOTE")
+        val checkpoint = verified.checkpoint as? RewatchRemoteCheckpoint.Synced
+            ?: return@withLock decline("NO_SYNCED_CHECKPOINT")
+        val remote = verified.remoteSession ?: return@withLock decline("NO_REMOTE_CURSOR")
+        val key = seriesKey(local.canonicalSeriesId)
+        if (remote.ownerKey != local.ownerKey ||
+            seriesKey(remote.canonicalSeriesId) != key ||
+            checkpoint.sessionId != remote.sessionId ||
+            remote.sessionId != local.sessionId || remote.updatedAtEpochMs != 0L ||
+            checkpoint.revision < 1L || checkpoint.revision >= Long.MAX_VALUE ||
+            (remote.episode == local.episode && local.phase == RewatchPhase.PLAYING &&
+                !RewatchCleanCursor.of(local, checkpoint.revision).matches(remote)))
+            return@withLock decline("REMOTE_BINDING_OR_EPISODE_CONFLICT")
+        val old = readChecked(profileId, accountId, deviceId)
+        val chain = old.pending.filter { seriesKey(it.canonicalSeriesId) == key }
+        if (chain.isEmpty() || seriesKey(old.pending.first().canonicalSeriesId) != key ||
+            old.recoveryArchive.size + chain.size > 1000) return@withLock decline("QUEUE_HEAD_OR_ARCHIVE_CAPACITY")
+        val firstRevision = chain.first().expectedRevision
+        if (firstRevision < 1L || firstRevision >= checkpoint.revision)
+            return@withLock decline("SERVER_REVISION_NOT_NEWER")
+        val ack = old.acknowledged[key]
+        if (ack != null && (ack.sessionId != local.sessionId ||
+                ack.revision > firstRevision)) return@withLock decline("ACKNOWLEDGED_ANCHOR_CONFLICT")
+        if (chain.withIndex().any { (index, event) ->
+                event.sessionId != local.sessionId || event.deviceId != deviceId ||
+                    event.expectedRevision != firstRevision + index.toLong() ||
+                    event.expectedRevision >= Long.MAX_VALUE
+            }) return@withLock decline("NONCONTIGUOUS_QUEUE")
+        if (!passiveQueueExplainsLocalCursor(chain, local))
+            return@withLock decline("QUEUE_DOES_NOT_EXPLAIN_LOCAL")
+        if (!stillCurrent(profileId, accountId, deviceId) || !localUnchanged())
+            return@withLock decline("LOCAL_CHANGED_DURING_RECOVERY")
+        storage.write(profileId, json.encodeToString(old.copy(
+            pending = old.pending.filterNot { seriesKey(it.canonicalSeriesId) == key },
+            recoveryArchive = old.recoveryArchive + chain,
+            archivedProgress = old.archivedProgress + (key to RewatchArchivedProgressProof(
+                accountId, deviceId, generation,
+                RewatchCleanCursor.of(local, checkpoint.revision)
+            ))
+        )))
+        true
+    }
+
+    suspend fun archivedProgressProof(
+        identity: RewatchCommitIdentity, canonicalSeriesId: String
+    ): RewatchArchivedProgressProof? = mutex.withLock {
+        val (profileId, accountId, deviceId) = identity
+        if (!stillCurrent(profileId, accountId, deviceId)) return@withLock null
+        val old = readChecked(profileId, accountId, deviceId)
+        val key = seriesKey(canonicalSeriesId)
+        if (old.pending.any { seriesKey(it.canonicalSeriesId) == key }) return@withLock null
+        old.archivedProgress[key]
+    }
+
+    /** Non-secret diagnostics: never expose event payloads or identity values. */
+    suspend fun pendingSummary(identity: RewatchCommitIdentity): String = mutex.withLock {
+        val (profileId, accountId, deviceId) = identity
+        if (!stillCurrent(profileId, accountId, deviceId)) return@withLock "profile_changed=true"
+        val pending = readChecked(profileId, accountId, deviceId).pending
+        val head = pending.firstOrNull() ?: return@withLock "pending_count=0"
+        val type = runCatching { json.parseToJsonElement(head.payload).jsonObject["type"]
+            ?.jsonPrimitive?.content }.getOrNull()?.takeIf { it in setOf(
+                "PROGRESS", "REPOSITION", "COMPLETE_EPISODE", "RESOLVE_METADATA", "STOP", "IMPORT_SNAPSHOT"
+            ) } ?: "UNKNOWN"
+        "pending_count=${pending.size} head_type=$type head_revision=${head.expectedRevision}"
     }
 
 
@@ -613,6 +728,7 @@ internal class RewatchSyncOutbox(
         storage.write(profileId, json.encodeToString(
             envelope.copy(
                 clean = envelope.clean + (key to cursor),
+                archivedProgress = envelope.archivedProgress - key,
                 acknowledged = envelope.acknowledged + (
                     key to RewatchAcknowledgedCheckpoint(
                         checkpoint.revision, checkpoint.sessionId

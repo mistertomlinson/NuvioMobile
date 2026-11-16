@@ -125,7 +125,8 @@ internal fun mergeRewatchRemoteWithLedger(
     canonicalSeriesId: String,
     remoteLookup: RewatchRemoteLookup,
     pendingOrUnpublished: Boolean,
-    appliedAtEpochMs: Long
+    appliedAtEpochMs: Long,
+    archivedProgress: RewatchArchivedProgressProof? = null
 ): Pair<List<RewatchSession>, RewatchLocalSyncLedger>? {
     if (profileId <= 0 || canonicalSeriesId.isBlank() ||
         simklAccountId.isBlank() || deviceId.isBlank() ||
@@ -147,15 +148,22 @@ internal fun mergeRewatchRemoteWithLedger(
     if (current != expectedLocal) return null
 
     val proof = ledger.cleanBySeries[key(canonicalSeriesId)]
+    val archived = current != null && archivedProgress != null &&
+        archivedProgress.simklAccountId == simklAccountId &&
+        archivedProgress.deviceId == deviceId &&
+        archivedProgress.generation == ledger.generation &&
+        archivedProgress.cursor.matches(current) &&
+        archivedProgress.cursor.sessionId == remote.sessionId &&
+        checkpoint.revision >= archivedProgress.cursor.revision
     if (current == null) {
         // A truly empty profile can adopt a verified remote replay. Do not
         // resurrect a replay which had a clean marker but was locally deleted.
         if (proof != null) return null
-    } else {
+    } else if (!archived) {
         if (proof == null ||
             proof.simklAccountId != simklAccountId ||
             proof.deviceId != deviceId ||
-            proof.generation != ledger.generation ||
+            proof.generation > ledger.generation ||
             !sameRewatchCursor(proof.cursor, current) ||
             checkpoint.revision <= proof.revision) return null
     }

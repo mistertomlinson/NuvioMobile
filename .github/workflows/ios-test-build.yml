@@ -32,12 +32,12 @@ jobs:
   build:
     name: iPad rewatch validation / unsigned IPA build
     runs-on: xcode-27
-    timeout-minutes: ${{ github.ref == 'refs/heads/fix/cross-device-rewatch-audit-20261115' && 120 || github.ref == 'refs/heads/fix/rewatch-stale-revision-manual-recovery-20261115' && 90 || github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114' && 345 || (github.ref == 'refs/heads/test/rewatch-public-https-20261112' || (github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113' || github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114')) && 330 || (github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && 75 || (inputs.configuration == 'Release' && 75 || 30)) }}
+    timeout-minutes: ${{ (github.ref == 'refs/heads/fix/cross-device-rewatch-audit-20261115' || github.ref == 'refs/heads/fix/ipad-details-rewatch-cursor-20261116') && 120 || github.ref == 'refs/heads/fix/rewatch-stale-revision-manual-recovery-20261115' && 90 || github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114' && 345 || (github.ref == 'refs/heads/test/rewatch-public-https-20261112' || (github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113' || github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114')) && 330 || (github.ref == 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && 75 || (inputs.configuration == 'Release' && 75 || 30)) }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
       GRADLE_OPTS: -Dfile.encoding=UTF-8
       # Keep Release optimizations and the established app identity on the iPad.
-      # Source is pinned to the 180 passing tests; don't repeat expensive simulator linking.
+      # Shared replay and Details policies are validated locally; skip duplicate simulator linking.
       IOS_CONFIGURATION: ${{ inputs.configuration || 'Release' }}
       KOTLIN_DAEMON_JVMARGS: -Xmx2048M
       NUVIO_GRADLE_JVMARGS: -Xmx4608M -Dfile.encoding=UTF-8 -XX:MaxMetaspaceSize=768M
@@ -59,7 +59,7 @@ jobs:
         with:
           # Save a cache for repeated rewatch-branch validations instead of
           # using the default branch-only write policy.
-          cache-read-only: ${{ github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' }}
+          cache-read-only: ${{ github.ref != 'refs/heads/feature/persistent-simkl-rewatch-0.6.7' && github.ref != 'refs/heads/fix/ipad-details-rewatch-cursor-20261116' }}
 
       - name: Cache Kotlin Native
         uses: actions/cache@v5
@@ -93,7 +93,7 @@ jobs:
           test -f local.properties
 
       - name: Use dedicated iPad Simkl V1 OAuth registration
-        if: (github.ref == 'refs/heads/test/rewatch-public-https-20261112' || (github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113' || github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114' || github.ref == 'refs/heads/fix/rewatch-stale-revision-manual-recovery-20261115' || github.ref == 'refs/heads/fix/cross-device-rewatch-audit-20261115'))
+        if: (github.ref == 'refs/heads/test/rewatch-public-https-20261112' || (github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113' || github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114' || github.ref == 'refs/heads/fix/rewatch-stale-revision-manual-recovery-20261115' || (github.ref == 'refs/heads/fix/cross-device-rewatch-audit-20261115' || github.ref == 'refs/heads/fix/ipad-details-rewatch-cursor-20261116')))
         shell: bash
         env:
           NUVIO_SIMKL_IPAD_V1_CLIENT_ID: ${{ secrets.NUVIO_SIMKL_IPAD_V1_CLIENT_ID }}
@@ -131,15 +131,15 @@ jobs:
       - name: Prepare iOS dependencies
         run: ./scripts/prepare-ios-dependencies.sh
 
-      - name: Validate manually requested cross-device repair packaging
-        if: github.ref == 'refs/heads/fix/cross-device-rewatch-audit-20261115'
+      - name: Validate manually requested rewatch repair packaging
+        if: (github.ref == 'refs/heads/fix/cross-device-rewatch-audit-20261115' || github.ref == 'refs/heads/fix/ipad-details-rewatch-cursor-20261116')
         shell: bash
         run: |
           set -euo pipefail
           test "${GITHUB_EVENT_NAME}" = workflow_dispatch
           test "${IOS_CONFIGURATION}" = Release
           {
-            echo "## Cross-device rewatch repair"
+            echo "## Rewatch sync and iPad Details repair"
             echo "Manual Release packaging only; no automatic build on push."
             echo "Uses the existing app identifiers and dedicated iPad Simkl registration."
             echo "Common replay tests and real client/server contract validated locally."
@@ -197,7 +197,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify isolated HTTPS test branch uses enabled replay gate
-        if: ((github.ref == 'refs/heads/test/rewatch-public-https-20261112' || (github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113' || github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114')) || github.ref == 'refs/heads/fix/rewatch-stale-revision-manual-recovery-20261115' || github.ref == 'refs/heads/fix/cross-device-rewatch-audit-20261115')
+        if: ((github.ref == 'refs/heads/test/rewatch-public-https-20261112' || (github.ref == 'refs/heads/fix/rewatch-manual-reposition-ipad-20261113' || github.ref == 'refs/heads/fix/rewatch-409-conflict-preserving-recovery-20261114')) || github.ref == 'refs/heads/fix/rewatch-stale-revision-manual-recovery-20261115' || (github.ref == 'refs/heads/fix/cross-device-rewatch-audit-20261115' || github.ref == 'refs/heads/fix/ipad-details-rewatch-cursor-20261116'))
         shell: bash
         run: |
           set -euo pipefail

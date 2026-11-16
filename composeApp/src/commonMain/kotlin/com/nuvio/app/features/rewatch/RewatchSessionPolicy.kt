@@ -87,6 +87,12 @@ fun recordRewatchProgress(
         return session
     }
 
+    // A paused player periodically saves the same position. Timestamp-only
+    // changes are not progress and must not invalidate its clean sync proof.
+    if (session.phase == RewatchPhase.PLAYING &&
+        session.positionMs == positionMs.coerceAtLeast(0L) &&
+        session.durationMs == durationMs.coerceAtLeast(0L)) return session
+
     return session.copy(
         positionMs = positionMs.coerceAtLeast(0L),
         durationMs = durationMs.coerceAtLeast(0L),
